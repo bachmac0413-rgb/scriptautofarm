@@ -1,0 +1,843 @@
+-- Script Kết Hợp Bay + Auto Combat - by Mạc Bách
+-- W: Tiến | S: Lùi | A: Trái | D: Phải | Space: Lên | Shift: Xuống | E: Tắt/Mở Bay | F: Tắt/Mở Auto Combat
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid = character:WaitForChild("Humanoid")
+local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+
+-- ==================== CẤU HÌNH BAY ====================
+local Fly = {
+    Enabled = false,
+    Speed = 50,
+    MaxSpeed = 100,
+    Acceleration = 10,
+    TurnSpeed = 0.5,
+    VerticalSpeed = 25,
+    CameraRelative = true,
+    UseBodyVelocity = true,
+    AntiFloat = true,
+    SmoothStop = true
+}
+
+-- ==================== CẤU HÌNH COMBAT ====================
+local COMBAT_CONFIG = {
+    enabled = true,
+    attacksPerTarget = 3,
+    maxTargets = 5,
+    baseRange = 100,
+    minDelay = 0.05,
+    maxDelay = 0.1,
+    hitDelay = 0.02,
+    randomization = {
+        range = {min = -2, max = 2},
+        timing = {min = -0.05, max = 0.05}
+    },
+    checkWhileFlying = true
+}
+
+-- ==================== BIẾN NỘI BỘ ====================
+-- Biến bay
+local flyConnection = nil
+local keysPressed = {}
+local bodyVelocity = nil
+local bodyGyro = nil
+local bodyPosition = nil
+local isTransitioning = false
+local targetVelocity = Vector3.new(0, 0, 0)
+local currentVelocity = Vector3.new(0, 0, 0)
+
+-- Biến combat
+local combatConnection = nil
+local characterConnection = nil
+local lastAttackTime = 0
+local Net = ReplicatedStorage:FindFirstChild("Modules") and ReplicatedStorage.Modules:FindFirstChild("Net")
+local RegisterAttack = Net and Net:WaitForChild("RE/RegisterAttack", 5)
+local RegisterHit = Net and Net:WaitForChild("RE/RegisterHit", 5)
+
+-- Biến GUI và hiệu ứng
+local ToggleBtn, SpeedLabel, StatusLabel, CombatBtn, CombatStatus
+local rainbowEffectRunning = false
+local rainbowConnection = nil
+
+-- ==================== HÀM HIỆU ỨNG CẦU VỒNG ====================
+local function startRainbowEffect(frame, title)
+    if rainbowConnection then
+        rainbowConnection:Disconnect()
+    end
+    
+    rainbowEffectRunning = true
+    local time = 0
+    
+    rainbowConnection = RunService.RenderStepped:Connect(function(delta)
+        if not frame or not frame.Parent then
+            rainbowConnection:Disconnect()
+            rainbowEffectRunning = false
+            return
+        end
+        
+        time = time + delta
+        
+        -- Hiệu ứng màu cầu vồng cho khung chính
+        local hue1 = (time * 0.5) % 1
+        local hue2 = (time * 0.5 + 0.33) % 1
+        local hue3 = (time * 0.5 + 0.66) % 1
+        
+        local color1 = Color3.fromHSV(hue1, 0.8, 0.3)
+        local color2 = Color3.fromHSV(hue2, 0.8, 0.3)
+        
+        -- Gradient cho background
+        frame.BackgroundColor3 = color1
+        
+        -- Hiệu ứng cho tiêu đề
+        if title then
+            local titleHue = (time * 0.8) % 1
+            title.TextColor3 = Color3.fromHSV(titleHue, 1, 1)
+            
+            -- Thêm hiệu ứng bóng cho text
+            title.TextStrokeTransparency = 0.5
+            title.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+        end
+        
+        -- Hiệu ứng cho nút bay
+        if ToggleBtn and ToggleBtn.Parent then
+            local btnHue = (time * 0.3) % 1
+            if not Fly.Enabled then
+                ToggleBtn.BackgroundColor3 = Color3.fromHSV(btnHue, 0.7, 0.6)
+            end
+        end
+        
+        -- Hiệu ứng cho nút combat
+        if CombatBtn and CombatBtn.Parent then
+            local combatHue = (time * 0.4 + 0.5) % 1
+            if not COMBAT_CONFIG.enabled then
+                CombatBtn.BackgroundColor3 = Color3.fromHSV(combatHue, 0.7, 0.6)
+            end
+        end
+    end)
+end
+
+-- ==================== HÀM COMBAT ====================
+local function GetPrimaryPart(model)
+    return model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("PrimaryPart")
+end
+
+local function IsValidTarget(target)
+    if not target then return false end
+    
+    local humanoid = target:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return false end
+
+    local targetPlayer = Players:GetPlayerFromCharacter(target)
+    if targetPlayer and targetPlayer.Team == player.Team then return false end
+    
+    return true
+end
+
+local function GetNearbyTargets()
+    local character = player.Character
+    if not character or not character.PrimaryPart then return {} end
+    
+    local charPos = character.PrimaryPart.Position
+    local targets = {}
+
+    -- Kiểm tra trong Characters
+    local charactersFolder = workspace:FindFirstChild("Characters")
+    if charactersFolder then
+        for _, entity in ipairs(charactersFolder:GetChildren()) do
+            if entity ~= character and IsValidTarget(entity) then
+                local primaryPart = GetPrimaryPart(entity)
+                if primaryPart then
+                    local distance = (primaryPart.Position - charPos).Magnitude
+                    local range = COMBAT_CONFIG.baseRange + math.random(
+                        COMBAT_CONFIG.randomization.range.min,
+                        COMBAT_CONFIG.randomization.range.max
+                    )
+                    
+                    if distance <= range then
+                        table.insert(targets, {
+                            model = entity,
+                            part = primaryPart,
+                            distance = distance
+                        })
+                    end
+                end
+            end
+        end
+    end
+
+    -- Kiểm tra trong Enemies
+    local enemiesFolder = workspace:FindFirstChild("Enemies")
+    if enemiesFolder then
+        for _, entity in ipairs(enemiesFolder:GetChildren()) do
+            if IsValidTarget(entity) then
+                local primaryPart = GetPrimaryPart(entity)
+                if primaryPart then
+                    local distance = (primaryPart.Position - charPos).Magnitude
+                    local range = COMBAT_CONFIG.baseRange + math.random(
+                        COMBAT_CONFIG.randomization.range.min,
+                        COMBAT_CONFIG.randomization.range.max
+                    )
+                    
+                    if distance <= range then
+                        table.insert(targets, {
+                            model = entity,
+                            part = primaryPart,
+                            distance = distance
+                        })
+                    end
+                end
+            end
+        end
+    end
+
+    -- Kiểm tra trực tiếp trong Workspace
+    for _, entity in ipairs(workspace:GetChildren()) do
+        if entity:IsA("Model") and entity ~= character and IsValidTarget(entity) then
+            local primaryPart = GetPrimaryPart(entity)
+            if primaryPart then
+                local distance = (primaryPart.Position - charPos).Magnitude
+                local range = COMBAT_CONFIG.baseRange + math.random(
+                    COMBAT_CONFIG.randomization.range.min,
+                    COMBAT_CONFIG.randomization.range.max
+                )
+                
+                if distance <= range then
+                    table.insert(targets, {
+                        model = entity,
+                        part = primaryPart,
+                        distance = distance
+                    })
+                end
+            end
+        end
+    end
+
+    table.sort(targets, function(a, b) return a.distance < b.distance end)
+    return targets
+end
+
+local function PerformAttackSequence(targets)
+    if #targets == 0 then return end
+    
+    if RegisterAttack then
+        RegisterAttack:FireServer()
+    end
+    
+    for i = 1, math.min(#targets, COMBAT_CONFIG.maxTargets) do
+        local target = targets[i]
+        for _ = 1, COMBAT_CONFIG.attacksPerTarget do
+            if RegisterHit then
+                RegisterHit:FireServer(target.part)
+            end
+            task.wait(COMBAT_CONFIG.hitDelay + math.random() * COMBAT_CONFIG.randomization.timing.max)
+        end
+    end
+end
+
+local function CombatLoop()
+    if not COMBAT_CONFIG.enabled then return end
+    if not Fly.Enabled and not COMBAT_CONFIG.checkWhileFlying then return end
+    
+    local now = tick()
+    local baseDelay = math.random(
+        COMBAT_CONFIG.minDelay * 100,
+        COMBAT_CONFIG.maxDelay * 100
+    ) / 100
+    
+    if now - lastAttackTime >= baseDelay then
+        local targets = GetNearbyTargets()
+        if #targets > 0 then
+            PerformAttackSequence(targets)
+            lastAttackTime = now
+        end
+    end
+end
+
+local function SetupCombat()
+    if combatConnection then
+        combatConnection:Disconnect()
+        combatConnection = nil
+    end
+    
+    if COMBAT_CONFIG.enabled then
+        combatConnection = RunService.Heartbeat:Connect(CombatLoop)
+    end
+end
+
+local function ToggleCombat()
+    COMBAT_CONFIG.enabled = not COMBAT_CONFIG.enabled
+    
+    if COMBAT_CONFIG.enabled then
+        print("⚔️ Đã bật Auto Combat!")
+        
+        if not RegisterAttack or not RegisterHit then
+            print("⚠️ Không tìm thấy module Net, combat có thể không hoạt động!")
+        end
+        
+        SetupCombat()
+        
+        if CombatBtn then
+            CombatBtn.Text = "⚔️ TẮT COMBAT (F)"
+            CombatBtn.BackgroundColor3 = Color3.fromRGB(180, 0, 0)
+        end
+        
+        if CombatStatus then
+            CombatStatus.Text = "Combat: Đang bật"
+            CombatStatus.TextColor3 = Color3.fromRGB(255, 100, 100)
+        end
+    else
+        print("🛑 Đã tắt Auto Combat")
+        
+        if combatConnection then
+            combatConnection:Disconnect()
+            combatConnection = nil
+        end
+        
+        if CombatBtn then
+            CombatBtn.Text = "⚔️ BẬT COMBAT (F)"
+            CombatBtn.BackgroundColor3 = Color3.fromHSV(0.5, 0.7, 0.6)
+        end
+        
+        if CombatStatus then
+            CombatStatus.Text = "Combat: Đang tắt"
+            CombatStatus.TextColor3 = Color3.fromRGB(150, 150, 150)
+        end
+    end
+end
+
+-- ==================== HÀM BAY ====================
+function createFlyParts()
+    if not character then return end
+    
+    -- Xóa các phần cũ nếu có
+    if bodyVelocity then
+        bodyVelocity:Destroy()
+        bodyVelocity = nil
+    end
+    if bodyGyro then
+        bodyGyro:Destroy()
+        bodyGyro = nil
+    end
+    if bodyPosition then
+        bodyPosition:Destroy()
+        bodyPosition = nil
+    end
+    
+    -- Tạo BodyVelocity để điều khiển vận tốc
+    bodyVelocity = Instance.new("BodyVelocity")
+    bodyVelocity.Name = "FlyBodyVelocity"
+    bodyVelocity.MaxForce = Vector3.new(4000, 4000, 4000)
+    bodyVelocity.Velocity = Vector3.new(0, 0, 0)
+    bodyVelocity.P = 1250
+    bodyVelocity.Parent = humanoidRootPart
+    
+    -- Tạo BodyGyro để ổn định hướng
+    bodyGyro = Instance.new("BodyGyro")
+    bodyGyro.Name = "FlyBodyGyro"
+    bodyGyro.MaxTorque = Vector3.new(5000, 5000, 5000)
+    bodyGyro.P = 3000
+    bodyGyro.D = 500
+    bodyGyro.CFrame = humanoidRootPart.CFrame
+    bodyGyro.Parent = humanoidRootPart
+    
+    -- Tạo BodyPosition để giữ độ cao
+    bodyPosition = Instance.new("BodyPosition")
+    bodyPosition.Name = "FlyBodyPosition"
+    bodyPosition.MaxForce = Vector3.new(0, 4000, 0)
+    bodyPosition.Position = humanoidRootPart.Position
+    bodyPosition.P = 1000
+    bodyPosition.D = 500
+    bodyPosition.Parent = humanoidRootPart
+    
+    -- Tắt trọng lực và đặt trạng thái bay
+    humanoid.PlatformStand = true
+    
+    print("[BẬT BAY] Đã tạo bộ phận bay")
+end
+
+function removeFlyParts()
+    isTransitioning = true
+    
+    -- Giảm dần vận tốc về 0
+    if Fly.SmoothStop and bodyVelocity then
+        local startVelocity = bodyVelocity.Velocity
+        local startTime = tick()
+        local duration = 0.5
+        
+        while tick() - startTime < duration do
+            local alpha = (tick() - startTime) / duration
+            local newVelocity = startVelocity:Lerp(Vector3.new(0, 0, 0), alpha)
+            bodyVelocity.Velocity = newVelocity
+            RunService.Heartbeat:Wait()
+        end
+    end
+    
+    -- Xóa các bộ phận bay
+    if bodyVelocity then
+        bodyVelocity.Velocity = Vector3.new(0, 0, 0)
+        bodyVelocity:Destroy()
+        bodyVelocity = nil
+    end
+    
+    if bodyGyro then
+        bodyGyro:Destroy()
+        bodyGyro = nil
+    end
+    
+    if bodyPosition then
+        bodyPosition:Destroy()
+        bodyPosition = nil
+    end
+    
+    -- Khôi phục trạng thái bình thường
+    humanoid.PlatformStand = false
+    humanoidRootPart.Velocity = Vector3.new(0, 0, 0)
+    humanoid:ChangeState(Enum.HumanoidStateType.Running)
+    
+    task.wait(0.1)
+    humanoidRootPart.Velocity = Vector3.new(0, 0, 0)
+    
+    isTransitioning = false
+    
+    print("[TẮT BAY] Đã xóa bộ phận bay an toàn")
+end
+
+function handleKeyPress(input)
+    if isTransitioning then return end
+    
+    if input.KeyCode == Enum.KeyCode.W then
+        keysPressed["W"] = true
+    elseif input.KeyCode == Enum.KeyCode.S then
+        keysPressed["S"] = true
+    elseif input.KeyCode == Enum.KeyCode.A then
+        keysPressed["A"] = true
+    elseif input.KeyCode == Enum.KeyCode.D then
+        keysPressed["D"] = true
+    elseif input.KeyCode == Enum.KeyCode.Space then
+        keysPressed["Space"] = true
+    elseif input.KeyCode == Enum.KeyCode.LeftShift or input.KeyCode == Enum.KeyCode.RightShift then
+        keysPressed["Shift"] = true
+    elseif input.KeyCode == Enum.KeyCode.E then
+        toggleFly()
+    elseif input.KeyCode == Enum.KeyCode.F then
+        ToggleCombat()
+    end
+end
+
+function handleKeyRelease(input)
+    if input.KeyCode == Enum.KeyCode.W then
+        keysPressed["W"] = false
+    elseif input.KeyCode == Enum.KeyCode.S then
+        keysPressed["S"] = false
+    elseif input.KeyCode == Enum.KeyCode.A then
+        keysPressed["A"] = false
+    elseif input.KeyCode == Enum.KeyCode.D then
+        keysPressed["D"] = false
+    elseif input.KeyCode == Enum.KeyCode.Space then
+        keysPressed["Space"] = false
+    elseif input.KeyCode == Enum.KeyCode.LeftShift or input.KeyCode == Enum.KeyCode.RightShift then
+        keysPressed["Shift"] = false
+    end
+end
+
+function calculateFlightDirection()
+    local direction = Vector3.new(0, 0, 0)
+    local camera = workspace.CurrentCamera
+    
+    if not camera then return direction end
+    
+    local forward = camera.CFrame.LookVector
+    local right = camera.CFrame.RightVector
+    local up = Vector3.new(0, 1, 0)
+    
+    if not Fly.CameraRelative then
+        forward = humanoidRootPart.CFrame.LookVector
+        right = humanoidRootPart.CFrame.RightVector
+    end
+    
+    forward = Vector3.new(forward.X, 0, forward.Z).Unit
+    right = Vector3.new(right.X, 0, right.Z).Unit
+    
+    if keysPressed["W"] then
+        direction = direction + forward
+    end
+    if keysPressed["S"] then
+        direction = direction - forward
+    end
+    if keysPressed["A"] then
+        direction = direction - right
+    end
+    if keysPressed["D"] then
+        direction = direction + right
+    end
+    if keysPressed["Space"] then
+        direction = direction + up
+    end
+    if keysPressed["Shift"] then
+        direction = direction - up
+    end
+    
+    if direction.Magnitude > 0 then
+        direction = direction.Unit
+    end
+    
+    return direction
+end
+
+function updateFlight()
+    if not Fly.Enabled or isTransitioning or not character or humanoid.Health <= 0 then return end
+    
+    local targetDirection = calculateFlightDirection()
+    
+    if targetDirection.Magnitude > 0 then
+        targetVelocity = targetDirection * Fly.Speed
+    else
+        targetVelocity = Vector3.new(0, 0, 0)
+    end
+    
+    currentVelocity = currentVelocity:Lerp(targetVelocity, 0.2)
+    
+    if bodyVelocity then
+        bodyVelocity.Velocity = currentVelocity
+    end
+    
+    if bodyGyro then
+        if targetDirection.Magnitude > 0 then
+            local targetCFrame = CFrame.new(humanoidRootPart.Position, humanoidRootPart.Position + targetDirection)
+            bodyGyro.CFrame = bodyGyro.CFrame:Lerp(targetCFrame, 0.1)
+        end
+    end
+    
+    if bodyPosition and Fly.AntiFloat then
+        local currentPos = humanoidRootPart.Position
+        local targetHeight = currentPos.Y
+        
+        if keysPressed["Space"] then
+            targetHeight = currentPos.Y + Fly.VerticalSpeed
+        elseif keysPressed["Shift"] then
+            targetHeight = currentPos.Y - Fly.VerticalSpeed
+        end
+        
+        bodyPosition.Position = Vector3.new(currentPos.X, targetHeight, currentPos.Z)
+    end
+end
+
+function toggleFly()
+    if isTransitioning then return end
+    
+    Fly.Enabled = not Fly.Enabled
+    
+    if Fly.Enabled then
+        print("🚀 Đã bật chế độ bay!")
+        
+        createFlyParts()
+        currentVelocity = Vector3.new(0, 0, 0)
+        targetVelocity = Vector3.new(0, 0, 0)
+        
+        if ToggleBtn then
+            ToggleBtn.Text = "🛑 TẮT BAY (E)"
+            ToggleBtn.BackgroundColor3 = Color3.fromRGB(180, 0, 0)
+        end
+        
+        if StatusLabel then
+            StatusLabel.Text = "Trạng thái: Đang bay"
+            StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+        end
+        
+        if flyConnection then
+            flyConnection:Disconnect()
+        end
+        
+        flyConnection = RunService.Heartbeat:Connect(updateFlight)
+    else
+        print("🛑 Đang tắt chế độ bay...")
+        
+        if StatusLabel then
+            StatusLabel.Text = "Trạng thái: Đang dừng..."
+            StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
+        end
+        
+        if flyConnection then
+            flyConnection:Disconnect()
+            flyConnection = nil
+        end
+        
+        keysPressed = {}
+        removeFlyParts()
+        
+        if ToggleBtn then
+            ToggleBtn.Text = "🚀 BẬT BAY (E)"
+            ToggleBtn.BackgroundColor3 = Color3.fromHSV(0.3, 0.7, 0.6)
+        end
+        
+        if StatusLabel then
+            StatusLabel.Text = "Trạng thái: Đang chờ"
+            StatusLabel.TextColor3 = Color3.fromRGB(150, 255, 150)
+        end
+        
+        print("🛑 Đã tắt chế độ bay an toàn")
+    end
+end
+
+function changeSpeed(amount)
+    Fly.Speed = math.clamp(Fly.Speed + amount, 10, Fly.MaxSpeed)
+    
+    if SpeedLabel then
+        SpeedLabel.Text = "Tốc độ: " .. Fly.Speed
+    end
+    
+    print("[TỐC ĐỘ BAY] " .. Fly.Speed)
+end
+
+-- ==================== GUI VỚI HIỆU ỨNG CẦU VỒNG ====================
+function createGUI()
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "ControlGUI"
+    ScreenGui.Parent = player.PlayerGui
+    
+    -- Khung chính với viền gradient
+    local MainFrame = Instance.new("Frame")
+    MainFrame.Size = UDim2.new(0, 320, 0, 240)
+    MainFrame.Position = UDim2.new(0.5, -160, 0.1, 0)
+    MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+    MainFrame.BackgroundTransparency = 0.2
+    MainFrame.Active = true
+    MainFrame.Draggable = true
+    MainFrame.Parent = ScreenGui
+    
+    -- Viền gradient
+    local FrameBorder = Instance.new("Frame")
+    FrameBorder.Size = UDim2.new(1, 4, 1, 4)
+    FrameBorder.Position = UDim2.new(0, -2, 0, -2)
+    FrameBorder.BackgroundTransparency = 1
+    FrameBorder.BorderSizePixel = 0
+    FrameBorder.Parent = MainFrame
+    
+    local UICorner = Instance.new("UICorner")
+    UICorner.CornerRadius = UDim.new(0, 12)
+    UICorner.Parent = MainFrame
+    
+    -- Tiêu đề với hiệu ứng
+    local Title = Instance.new("TextLabel")
+    Title.Text = "🎮 CONTROL PANEL - by Mạc Bách 🎮"
+    Title.Size = UDim2.new(1, 0, 0, 40)
+    Title.Position = UDim2.new(0, 0, 0, 5)
+    Title.BackgroundTransparency = 1
+    Title.TextColor3 = Color3.fromRGB(100, 200, 255)
+    Title.Font = Enum.Font.GothamBold
+    Title.TextSize = 16
+    Title.TextStrokeTransparency = 0.5
+    Title.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    Title.Parent = MainFrame
+    
+    -- Nút bay
+    ToggleBtn = Instance.new("TextButton")
+    ToggleBtn.Name = "ToggleBtn"
+    ToggleBtn.Text = "🚀 BẬT BAY (E)"
+    ToggleBtn.Size = UDim2.new(0.9, 0, 0, 35)
+    ToggleBtn.Position = UDim2.new(0.05, 0, 0.2, 0)
+    ToggleBtn.BackgroundColor3 = Color3.fromHSV(0.3, 0.7, 0.6)
+    ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    ToggleBtn.Font = Enum.Font.GothamBold
+    ToggleBtn.TextSize = 14
+    ToggleBtn.TextStrokeTransparency = 0.5
+    ToggleBtn.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    
+    local btnCorner = Instance.new("UICorner")
+    btnCorner.CornerRadius = UDim.new(0, 8)
+    btnCorner.Parent = ToggleBtn
+    
+    ToggleBtn.Parent = MainFrame
+    
+    -- Nút combat
+    CombatBtn = Instance.new("TextButton")
+    CombatBtn.Name = "CombatBtn"
+    CombatBtn.Text = "⚔️ BẬT COMBAT (F)"
+    CombatBtn.Size = UDim2.new(0.9, 0, 0, 35)
+    CombatBtn.Position = UDim2.new(0.05, 0, 0.4, 0)
+    CombatBtn.BackgroundColor3 = Color3.fromHSV(0.5, 0.7, 0.6)
+    CombatBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    CombatBtn.Font = Enum.Font.GothamBold
+    CombatBtn.TextSize = 14
+    CombatBtn.TextStrokeTransparency = 0.5
+    CombatBtn.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    
+    local combatCorner = Instance.new("UICorner")
+    combatCorner.CornerRadius = UDim.new(0, 8)
+    combatCorner.Parent = CombatBtn
+    
+    CombatBtn.Parent = MainFrame
+    
+    -- Label tốc độ
+    SpeedLabel = Instance.new("TextLabel")
+    SpeedLabel.Name = "SpeedLabel"
+    SpeedLabel.Text = "⚡ Tốc độ: " .. Fly.Speed
+    SpeedLabel.Size = UDim2.new(1, 0, 0, 20)
+    SpeedLabel.Position = UDim2.new(0, 0, 0.65, 0)
+    SpeedLabel.BackgroundTransparency = 1
+    SpeedLabel.TextColor3 = Color3.fromRGB(200, 200, 255)
+    SpeedLabel.Font = Enum.Font.Gotham
+    SpeedLabel.TextSize = 12
+    SpeedLabel.TextStrokeTransparency = 0.5
+    SpeedLabel.Parent = MainFrame
+    
+    -- Label trạng thái bay
+    StatusLabel = Instance.new("TextLabel")
+    StatusLabel.Name = "StatusLabel"
+    StatusLabel.Text = "🛸 Bay: Đang chờ"
+    StatusLabel.Size = UDim2.new(1, 0, 0, 20)
+    StatusLabel.Position = UDim2.new(0, 0, 0.75, 0)
+    StatusLabel.BackgroundTransparency = 1
+    StatusLabel.TextColor3 = Color3.fromRGB(150, 255, 150)
+    StatusLabel.Font = Enum.Font.Gotham
+    StatusLabel.TextSize = 12
+    StatusLabel.TextStrokeTransparency = 0.5
+    StatusLabel.Parent = MainFrame
+    
+    -- Label trạng thái combat
+    CombatStatus = Instance.new("TextLabel")
+    CombatStatus.Name = "CombatStatus"
+    CombatStatus.Text = "⚔️ Combat: Đang tắt"
+    CombatStatus.Size = UDim2.new(1, 0, 0, 20)
+    CombatStatus.Position = UDim2.new(0, 0, 0.85, 0)
+    CombatStatus.BackgroundTransparency = 1
+    CombatStatus.TextColor3 = Color3.fromRGB(150, 150, 150)
+    CombatStatus.Font = Enum.Font.Gotham
+    CombatStatus.TextSize = 12
+    CombatStatus.TextStrokeTransparency = 0.5
+    CombatStatus.Parent = MainFrame
+    
+    -- Label hướng dẫn
+    local HelpLabel = Instance.new("TextLabel")
+    HelpLabel.Text = "📌 E: Bay | F: Combat | P: Tắt GUI"
+    HelpLabel.Size = UDim2.new(1, 0, 0, 15)
+    HelpLabel.Position = UDim2.new(0, 0, 0.95, 0)
+    HelpLabel.BackgroundTransparency = 1
+    HelpLabel.TextColor3 = Color3.fromRGB(150, 200, 255)
+    HelpLabel.Font = Enum.Font.Gotham
+    HelpLabel.TextSize = 10
+    HelpLabel.TextStrokeTransparency = 0.5
+    HelpLabel.Parent = MainFrame
+    
+    -- Bắt đầu hiệu ứng cầu vồng
+    startRainbowEffect(MainFrame, Title)
+    
+    -- Sự kiện nút
+    ToggleBtn.MouseButton1Click:Connect(toggleFly)
+    CombatBtn.MouseButton1Click:Connect(ToggleCombat)
+    
+    return ScreenGui, MainFrame, Title
+end
+
+-- ==================== KHỞI ĐỘNG ====================
+function initialize()
+    print("🎮 Script Kết Hợp Bay + Combat - by Mạc Bách")
+    print("🌈 GUI với hiệu ứng cầu vồng đã được kích hoạt!")
+    print("📌 Phím tắt:")
+    print("  E: Bật/Tắt Bay")
+    print("  F: Bật/Tắt Auto Combat")
+    print("  W/S/A/D: Di chuyển")
+    print("  Space/Shift: Lên/Xuống")
+    print("  +/-: Tăng/Giảm tốc độ bay")
+    
+    -- Tạo GUI
+    local gui, mainFrame, title = createGUI()
+    
+    -- Đăng ký sự kiện bàn phím
+    UserInputService.InputBegan:Connect(handleKeyPress)
+    UserInputService.InputEnded:Connect(handleKeyRelease)
+    
+    -- Phím tắt thêm
+    UserInputService.InputBegan:Connect(function(input)
+        if input.KeyCode == Enum.KeyCode.Equals or input.KeyCode == Enum.KeyCode.Plus then
+            changeSpeed(10)
+        elseif input.KeyCode == Enum.KeyCode.Minus then
+            changeSpeed(-10)
+        elseif input.KeyCode == Enum.KeyCode.Zero then
+            Fly.Speed = 50
+            if SpeedLabel then
+                SpeedLabel.Text = "⚡ Tốc độ: " .. Fly.Speed
+            end
+            print("[RESET] Đã reset tốc độ về 50")
+        elseif input.KeyCode == Enum.KeyCode.P then
+            print("🔌 Đang tắt toàn bộ script...")
+            
+            -- Tắt hiệu ứng cầu vồng
+            if rainbowConnection then
+                rainbowConnection:Disconnect()
+                rainbowEffectRunning = false
+            end
+            
+            if Fly.Enabled then toggleFly() end
+            if COMBAT_CONFIG.enabled then ToggleCombat() end
+            
+            task.wait(0.5)
+            
+            local gui = player.PlayerGui:FindFirstChild("ControlGUI")
+            if gui then gui:Destroy() end
+            
+            print("🔌 Đã tắt toàn bộ script và GUI")
+        end
+    end)
+    
+    -- Khởi động combat
+    task.wait(1)
+    if Net and RegisterAttack and RegisterHit then
+        print("✅ Đã tìm thấy module Combat")
+        SetupCombat()
+    else
+        print("⚠️ Không tìm thấy module Combat")
+        print("⚠️ Auto Combat có thể không hoạt động")
+    end
+    
+    -- Xử lý khi nhân vật chết
+    humanoid.Died:Connect(function()
+        print("[HỆ THỐNG] Nhân vật đã chết")
+        if Fly.Enabled then toggleFly() end
+        if COMBAT_CONFIG.enabled then ToggleCombat() end
+    end)
+    
+    -- Xử lý khi hồi sinh
+    characterConnection = player.CharacterAdded:Connect(function(newChar)
+        print("[HỆ THỐNG] Nhân vật hồi sinh")
+        character = newChar
+        humanoid = newChar:WaitForChild("Humanoid")
+        humanoidRootPart = newChar:WaitForChild("HumanoidRootPart")
+        
+        task.wait(1)
+        
+        if Fly.Enabled then
+            print("[HỆ THỐNG] Tự động bật lại bay")
+            toggleFly()
+            toggleFly() -- Bật lại bay
+        end
+        
+        if COMBAT_CONFIG.enabled then
+            print("[HỆ THỐNG] Tự động bật lại combat")
+            ToggleCombat()
+            ToggleCombat() -- Bật lại combat
+        end
+    end)
+    
+    -- Hiệu ứng console
+    local colors = {"🔴", "🟠", "🟡", "🟢", "🔵", "🟣", "🟤"}
+    for i = 1, #colors do
+        task.wait(0.1)
+        print(colors[i] .. " GUI đang khởi động...")
+    end
+    
+    print("\n✅ Script đã sẵn sàng!")
+    print("   Bay: " .. (Fly.Enabled and "BẬT" or "TẮT"))
+    print("   Combat: " .. (COMBAT_CONFIG.enabled and "BẬT" or "TẮT"))
+    print("   Hiệu ứng cầu vồng: BẬT")
+end
+
+-- ==================== CHẠY CHƯƠNG TRÌNH ====================
+initialize()
