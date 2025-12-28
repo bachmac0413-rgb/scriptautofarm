@@ -1,0 +1,567 @@
+-- Auto Farm Level Blox Fruits - by Mạc Bách
+-- Bay đến quái, đứng trên đầu, tự động tìm quái mới khi quái chết
+
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+local humanoid = character:WaitForChild("Humanoid")
+
+-- DỮ LIỆU CÁC ĐẢO THEO LEVEL (Blox Fruits)
+local IslandsData = {
+    -- Starter Sea
+    ["Starter Island"] = {
+        level = 1,
+        position = Vector3.new(100, 100, 100),
+        npcs = {"Bandit", "Monkey"}
+    },
+    ["Jungle"] = {
+        level = 10,
+        position = Vector3.new(500, 100, 500),
+        npcs = {"Gorilla", "Pirate"}
+    },
+    ["Pirate Village"] = {
+        level = 20,
+        position = Vector3.new(800, 100, 800),
+        npcs = {"Pirate", "Brute"}
+    },
+    ["Desert"] = {
+        level = 30,
+        position = Vector3.new(1200, 100, 1200),
+        npcs = {"Desert Bandit", "Desert Officer"}
+    },
+    ["Frozen Village"] = {
+        level = 40,
+        position = Vector3.new(1500, 100, 1500),
+        npcs = {"Snow Bandit", "Snowman"}
+    },
+    ["Marine Fortress"] = {
+        level = 50,
+        position = Vector3.new(1800, 100, 1800),
+        npcs = {"Marine", "Marine Captain"}
+    }
+}
+
+-- CẤU HÌNH AUTO FARM
+local AutoFarm = {
+    Enabled = false,
+    CurrentIsland = nil,
+    FlyHeight = 15, -- Độ cao bay trên đầu quái
+    TeleportSpeed = 100, -- Tốc độ teleport
+    CheckRange = 500, -- Phạm vi kiểm tra quái
+    SafeDistance = 10, -- Khoảng cách an toàn
+    TargetPriority = "Closest", -- Ưu tiên mục tiêu
+    Blacklist = {"Boss", "Dough King", "Raid Boss"},
+    Whitelist = {}, -- Danh sách quái ưu tiên farm
+    ShowDebugInfo = true,
+    AutoAcceptQuest = true, -- Tự động nhận nhiệm vụ
+    QuestNPCs = {"Quest Giver", "Marine Captain", "Bandit Leader"}
+}
+
+-- BIẾN LƯU TRỮ
+local target = nil
+local isFlying = false
+local isAtIsland = false
+local farmConnection = nil
+local flyConnection = nil
+local questAccepted = false
+local stats = {
+    TotalMobs = 0,
+    CurrentIsland = nil,
+    StartTime = os.time()
+}
+
+-- KIỂM TRA LEVEL CỦA NGƯỜI CHƠI
+function getPlayerLevel()
+    local data = player:FindFirstChild("Data")
+    if data then
+        local level = data:FindFirstChild("Level")
+        if level then
+            return level.Value
+        end
+    end
+    return 1 -- Mặc định level 1 nếu không tìm thấy
+end
+
+-- XÁC ĐỊNH ĐẢO PHÙ HỢP VỚI LEVEL
+function getSuitableIsland()
+    local playerLevel = getPlayerLevel()
+    local suitableIsland = nil
+    local highestLevel = 0
+    
+    for islandName, islandData in pairs(IslandsData) do
+        if playerLevel >= islandData.level and islandData.level > highestLevel then
+            highestLevel = islandData.level
+            suitableIsland = islandName
+        end
+    end
+    
+    return suitableIsland
+end
+
+-- LẤY TỌA ĐỘ CỦA ĐẢO
+function getIslandPosition(islandName)
+    if IslandsData[islandName] then
+        return IslandsData[islandName].position
+    end
+    return Vector3.new(0, 100, 0) -- Vị trí mặc định
+end
+
+-- TÌM TẤT CẢ NPC TRONG BÁN KÍNH
+function getAllNPCsInRange()
+    local npcs = {}
+    
+    -- Kiểm tra trong các folder NPC
+    for _, folderName in pairs({"NPCs", "Enemies", "Characters"}) do
+        local folder = Workspace:FindFirstChild(folderName)
+        if folder then
+            for _, npc in pairs(folder:GetChildren()) do
+                if npc:IsA("Model") and npc:FindFirstChild("Humanoid") and npc:FindFirstChild("HumanoidRootPart") then
+                    if npc.Humanoid.Health > 0 then
+                        -- Kiểm tra blacklist
+                        local isBlacklisted = false
+                        for _, black in pairs(AutoFarm.Blacklist) do
+                            if string.find(npc.Name:lower(), black:lower()) then
+                                isBlacklisted = true
+                                break
+                            end
+                        end
+                        
+                        if not isBlacklisted then
+                            -- Kiểm tra khoảng cách
+                            local distance = (humanoidRootPart.Position - npc.HumanoidRootPart.Position).Magnitude
+                            if distance <= AutoFarm.CheckRange then
+                                table.insert(npcs, {
+                                    model = npc,
+                                    position = npc.HumanoidRootPart.Position,
+                                    distance = distance,
+                                    health = npc.Humanoid.Health,
+                                    maxHealth = npc.Humanoid.MaxHealth
+                                })
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    return npcs
+end
+
+-- TÌM NPC TỐT NHẤT ĐỂ FARM
+function findBestTarget()
+    local npcs = getAllNPCsInRange()
+    if #npcs == 0 then return nil end
+    
+    local bestTarget = nil
+    local bestScore = -math.huge
+    
+    for _, npcData in pairs(npcs) do
+        local score = 0
+        
+        if AutoFarm.TargetPriority == "Closest" then
+            score = AutoFarm.CheckRange - npcData.distance
+        elseif AutoFarm.TargetPriority == "LowestHP" then
+            score = 1000 - npcData.health
+        elseif AutoFarm.TargetPriority == "HighestXP" then
+            -- NPC có level cao hơn cho nhiều XP
+            score = npcData.maxHealth * 10
+        end
+        
+        -- Ưu tiên whitelist
+        for _, white in pairs(AutoFarm.Whitelist) do
+            if string.find(npcData.model.Name:lower(), white:lower()) then
+                score = score + 5000
+                break
+            end
+        end
+        
+        if score > bestScore then
+            bestScore = score
+            bestTarget = npcData.model
+        end
+    end
+    
+    return bestTarget
+end
+
+-- TELEPORT ĐẾN VỊ TRÍ
+function teleportTo(position, heightOffset)
+    local targetPosition = position + Vector3.new(0, heightOffset or AutoFarm.FlyHeight, 0)
+    
+    -- Tắt trọng lực và di chuyển
+    humanoidRootPart.Velocity = Vector3.new(0, 0, 0)
+    humanoidRootPart.CFrame = CFrame.new(targetPosition)
+    
+    return true
+end
+
+-- BAY ĐẾN QUÁI VÀ ĐỨNG TRÊN ĐẦU
+function flyToTarget(npc)
+    if not npc or not npc:FindFirstChild("HumanoidRootPart") then return false end
+    
+    print("[MẠC BÁCH] Đang bay đến: " .. npc.Name)
+    
+    -- Lấy vị trí chính xác của quái
+    local targetPosition = npc.HumanoidRootPart.Position
+    
+    -- Teleport đến vị trí trên đầu quái
+    teleportTo(targetPosition, AutoFarm.FlyHeight)
+    
+    -- Giữ vị trí trên đầu quái
+    if flyConnection then
+        flyConnection:Disconnect()
+    end
+    
+    flyConnection = RunService.Heartbeat:Connect(function()
+        if npc and npc:FindFirstChild("HumanoidRootPart") and npc.Humanoid.Health > 0 then
+            local newPosition = npc.HumanoidRootPart.Position + Vector3.new(0, AutoFarm.FlyHeight, 0)
+            humanoidRootPart.CFrame = CFrame.new(newPosition)
+            humanoidRootPart.Velocity = Vector3.new(0, 0, 0)
+        else
+            -- Quái đã chết, ngừng bay
+            if flyConnection then
+                flyConnection:Disconnect()
+                flyConnection = nil
+            end
+            target = nil
+        end
+    end)
+    
+    isFlying = true
+    target = npc
+    return true
+end
+
+-- TỰ ĐỘNG NHẬN NHIỆM VỤ
+function autoAcceptQuest()
+    if not AutoFarm.AutoAcceptQuest then return end
+    
+    -- Tìm NPC nhiệm vụ
+    for _, npcName in pairs(AutoFarm.QuestNPCs) do
+        for _, obj in pairs(Workspace:GetChildren()) do
+            if obj:IsA("Model") and string.find(obj.Name:lower(), npcName:lower()) then
+                local distance = (humanoidRootPart.Position - obj.PrimaryPart.Position).Magnitude
+                if distance <= 50 then
+                    -- Tự động click để nhận nhiệm vụ
+                    local clickDetector = obj:FindFirstChildOfClass("ClickDetector")
+                    if clickDetector then
+                        fireclickdetector(clickDetector)
+                        print("[MẠC BÁCH] Đã nhận nhiệm vụ từ: " .. obj.Name)
+                        questAccepted = true
+                        return true
+                    end
+                end
+            end
+        end
+    end
+    
+    return false
+end
+
+-- ĐẾN ĐẢO PHÙ HỢP
+function goToSuitableIsland()
+    local islandName = getSuitableIsland()
+    if not islandName then
+        print("[MẠC BÁCH] Không tìm thấy đảo phù hợp!")
+        return false
+    end
+    
+    local islandPosition = getIslandPosition(islandName)
+    AutoFarm.CurrentIsland = islandName
+    stats.CurrentIsland = islandName
+    
+    print("[MẠC BÁCH] Đang đến đảo: " .. islandName .. " (Level yêu cầu: " .. IslandsData[islandName].level .. ")")
+    
+    -- Teleport đến đảo
+    teleportTo(islandPosition, 100)
+    
+    -- Nhận nhiệm vụ nếu có
+    task.wait(2)
+    autoAcceptQuest()
+    
+    isAtIsland = true
+    return true
+end
+
+-- VÒNG LẶP FARM CHÍNH
+function mainFarmLoop()
+    if not AutoFarm.Enabled or humanoid.Health <= 0 then return end
+    
+    -- KIỂM TRA ĐẾN ĐẢO CHƯA
+    if not isAtIsland then
+        goToSuitableIsland()
+        return
+    end
+    
+    -- TÌM VÀ BAY ĐẾN QUÁI
+    if not target then
+        target = findBestTarget()
+        
+        if target then
+            flyToTarget(target)
+            stats.TotalMobs = stats.TotalMobs + 1
+        else
+            -- KHÔNG CÓ QUÁI, DI CHUYỂN TÌM KIẾM
+            local randomPos = humanoidRootPart.Position + Vector3.new(
+                math.random(-100, 100),
+                AutoFarm.FlyHeight,
+                math.random(-100, 100)
+            )
+            teleportTo(randomPos)
+        end
+    else
+        -- KIỂM TRA QUÁI CÒN SỐNG KHÔNG
+        if not target:FindFirstChild("Humanoid") or target.Humanoid.Health <= 0 then
+            print("[MẠC BÁCH] Quái đã chết, tìm quái mới...")
+            target = nil
+            
+            -- Dừng bay
+            if flyConnection then
+                flyConnection:Disconnect()
+                flyConnection = nil
+            end
+        else
+            -- ĐANG ĐỨNG TRÊN ĐẦU QUÁI, KHÔNG LÀM GÌ CẢ
+            -- (Chờ quái bị tiêu diệt bởi người khác hoặc script khác)
+        end
+    end
+end
+
+-- TẠO GUI ĐIỀU KHIỂN
+function createControlGUI()
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "MacBachLevelFarm"
+    ScreenGui.Parent = player:WaitForChild("PlayerGui")
+    
+    local MainFrame = Instance.new("Frame")
+    MainFrame.Size = UDim2.new(0, 350, 0, 250)
+    MainFrame.Position = UDim2.new(0, 20, 0, 20)
+    MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+    MainFrame.BackgroundTransparency = 0.05
+    MainFrame.Active = true
+    MainFrame.Draggable = true
+    MainFrame.Parent = ScreenGui
+    
+    -- HEADER
+    local Header = Instance.new("Frame")
+    Header.Size = UDim2.new(1, 0, 0, 40)
+    Header.BackgroundColor3 = Color3.fromRGB(30, 30, 50)
+    Header.Parent = MainFrame
+    
+    local Title = Instance.new("TextLabel")
+    Title.Text = "🚀 AUTO FARM LEVEL BLOX FRUITS"
+    Title.Size = UDim2.new(1, 0, 1, 0)
+    Title.BackgroundTransparency = 1
+    Title.TextColor3 = Color3.fromRGB(255, 100, 100)
+    Title.Font = Enum.Font.GothamBold
+    Title.TextSize = 18
+    Title.Parent = Header
+    
+    local SubTitle = Instance.new("TextLabel")
+    SubTitle.Text = "by Mạc Bách - Bay đến quái & đứng trên đầu"
+    SubTitle.Size = UDim2.new(1, 0, 0, 20)
+    SubTitle.Position = UDim2.new(0, 0, 1, -20)
+    SubTitle.BackgroundTransparency = 1
+    SubTitle.TextColor3 = Color3.fromRGB(100, 200, 255)
+    SubTitle.Font = Enum.Font.Gotham
+    SubTitle.TextSize = 12
+    SubTitle.Parent = Header
+    
+    -- CONTROL PANEL
+    local ControlPanel = Instance.new("Frame")
+    ControlPanel.Size = UDim2.new(1, -20, 0, 120)
+    ControlPanel.Position = UDim2.new(0, 10, 0, 50)
+    ControlPanel.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+    ControlPanel.BorderSizePixel = 0
+    ControlPanel.Parent = MainFrame
+    
+    local StartBtn = Instance.new("TextButton")
+    StartBtn.Name = "StartBtn"
+    StartBtn.Text = "▶ BẮT ĐẦU FARM LEVEL"
+    StartBtn.Size = UDim2.new(0.9, 0, 0, 45)
+    StartBtn.Position = UDim2.new(0.05, 0, 0.1, 0)
+    StartBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 0)
+    StartBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    StartBtn.Font = Enum.Font.GothamBold
+    StartBtn.TextSize = 16
+    StartBtn.Parent = ControlPanel
+    
+    local StopBtn = Instance.new("TextButton")
+    StopBtn.Name = "StopBtn"
+    StopBtn.Text = "⏸ DỪNG FARM"
+    StopBtn.Size = UDim2.new(0.9, 0, 0, 45)
+    StopBtn.Position = UDim2.new(0.05, 0, 0.6, 0)
+    StopBtn.BackgroundColor3 = Color3.fromRGB(180, 0, 0)
+    StopBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    StopBtn.Font = Enum.Font.Gotham
+    StopBtn.TextSize = 14
+    StopBtn.Visible = false
+    StopBtn.Parent = ControlPanel
+    
+    -- INFO PANEL
+    local InfoPanel = Instance.new("Frame")
+    InfoPanel.Size = UDim2.new(1, -20, 0, 60)
+    InfoPanel.Position = UDim2.new(0, 10, 0, 180)
+    InfoPanel.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+    InfoPanel.BorderSizePixel = 0
+    InfoPanel.Parent = MainFrame
+    
+    local LevelLabel = Instance.new("TextLabel")
+    LevelLabel.Name = "LevelLabel"
+    LevelLabel.Text = "Level: Đang tải..."
+    LevelLabel.Size = UDim2.new(1, -20, 0, 25)
+    LevelLabel.Position = UDim2.new(0, 10, 0, 5)
+    LevelLabel.BackgroundTransparency = 1
+    LevelLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    LevelLabel.Font = Enum.Font.Gotham
+    LevelLabel.TextSize = 14
+    LevelLabel.TextXAlignment = Enum.TextXAlignment.Left
+    LevelLabel.Parent = InfoPanel
+    
+    local IslandLabel = Instance.new("TextLabel")
+    IslandLabel.Name = "IslandLabel"
+    IslandLabel.Text = "Đảo: Chưa chọn"
+    IslandLabel.Size = UDim2.new(1, -20, 0, 25)
+    IslandLabel.Position = UDim2.new(0, 10, 0, 30)
+    IslandLabel.BackgroundTransparency = 1
+    IslandLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    IslandLabel.Font = Enum.Font.Gotham
+    IslandLabel.TextSize = 14
+    IslandLabel.TextXAlignment = Enum.TextXAlignment.Left
+    IslandLabel.Parent = InfoPanel
+    
+    -- SỰ KIỆN BUTTONS
+    StartBtn.MouseButton1Click:Connect(function()
+        AutoFarm.Enabled = true
+        StartBtn.Visible = false
+        StopBtn.Visible = true
+        print("[MẠC BÁCH] Đã bật Auto Farm Level!")
+    end)
+    
+    StopBtn.MouseButton1Click:Connect(function()
+        AutoFarm.Enabled = false
+        StartBtn.Visible = true
+        StopBtn.Visible = false
+        
+        -- Dừng bay
+        if flyConnection then
+            flyConnection:Disconnect()
+            flyConnection = nil
+        end
+        
+        print("[MẠC BÁCH] Đã dừng Auto Farm Level")
+    end)
+    
+    -- CẬP NHẬT THÔNG TIN
+    spawn(function()
+        while ScreenGui.Parent do
+            task.wait(1)
+            
+            -- CẬP NHẬT LEVEL
+            local playerLevel = getPlayerLevel()
+            LevelLabel.Text = "Level: " .. playerLevel
+            
+            -- CẬP NHẬT ĐẢO
+            if AutoFarm.CurrentIsland then
+                IslandLabel.Text = "Đảo: " .. AutoFarm.CurrentIsland
+            end
+            
+            -- CẬP NHẬT MỤC TIÊU
+            if target and AutoFarm.ShowDebugInfo then
+                local distance = (humanoidRootPart.Position - target.HumanoidRootPart.Position).Magnitude
+                print(string.format("[DEBUG] Target: %s | Distance: %.1f | HP: %d/%d", 
+                    target.Name, distance, target.Humanoid.Health, target.Humanoid.MaxHealth))
+            end
+        end
+    end)
+    
+    return ScreenGui
+end
+
+-- BẬT/TẮT AUTO FARM
+function toggleAutoFarm(state)
+    AutoFarm.Enabled = state
+    
+    if state then
+        print("🚀 AUTO FARM LEVEL BLOX FRUITS - by Mạc Bách")
+        print("📊 Level hiện tại: " .. getPlayerLevel())
+        print("🎯 Tính năng: Bay đến quái & đứng trên đầu")
+        print("⚡ Không tự động đánh - Chỉ hỗ trợ positioning")
+        
+        if farmConnection then
+            farmConnection:Disconnect()
+        end
+        
+        farmConnection = RunService.Heartbeat:Connect(function()
+            mainFarmLoop()
+        end)
+    else
+        if farmConnection then
+            farmConnection:Disconnect()
+            farmConnection = nil
+        end
+        
+        if flyConnection then
+            flyConnection:Disconnect()
+            flyConnection = nil
+        end
+        
+        print("⏸ Đã tắt Auto Farm Level")
+    end
+end
+
+-- KHỞI TẠO
+function initialize()
+    print("🎮 Auto Farm Level Blox Fruits")
+    print("👤 Creator: Mạc Bách")
+    print("🌟 Chỉ bay đến quái & đứng trên đầu")
+    
+    -- Tạo GUI
+    createControlGUI()
+    
+    -- Kiểm tra level ban đầu
+    local initialLevel = getPlayerLevel()
+    print("📈 Level hiện tại của bạn: " .. initialLevel)
+    
+    -- Xử lý khi chết
+    humanoid.Died:Connect(function()
+        toggleAutoFarm(false)
+        print("[HỆ THỐNG] Nhân vật đã chết, tạm dừng Auto Farm")
+    end)
+    
+    -- Hồi sinh
+    player.CharacterAdded:Connect(function(newChar)
+        character = newChar
+        humanoidRootPart = newChar:WaitForChild("HumanoidRootPart")
+        humanoid = newChar:WaitForChild("Humanoid")
+        
+        if AutoFarm.Enabled then
+            task.wait(3)
+            toggleAutoFarm(true)
+        end
+    end)
+    
+    -- Hướng dẫn
+    task.wait(2)
+    print("\n=== HƯỚNG DẪN SỬ DỤNG ===")
+    print("1. Nhấn 'BẮT ĐẦU FARM LEVEL' để bật")
+    print("2. Script sẽ tự động:")
+    print("   - Kiểm tra level của bạn")
+    print("   - Chọn đảo phù hợp")
+    print("   - Teleport đến đảo")
+    print("   - Tự động nhận nhiệm vụ (nếu có)")
+    print("   - Bay đến quái và đứng trên đầu")
+    print("   - Khi quái chết, tự động tìm quái mới")
+    print("3. Bạn cần có script đánh tự động riêng")
+    print("4. Kéo thả GUI để di chuyển")
+end
+
+-- CHẠY KHỞI TẠO
+initialize()
