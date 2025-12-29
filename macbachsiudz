@@ -1,0 +1,1436 @@
+-- Script Auto Farm Quét Quái 5000 Studs - by Mạc Bách
+-- Tự động quét quái, bay đến từng con và đánh chết
+-- Tốc độ bay 250, xuyên tường (NoClip), Gom 4 quái
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+local TweenService = game:GetService("TweenService")
+
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid = character:WaitForChild("Humanoid")
+local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+
+-- ==================== CẤU HÌNH ====================
+local Config = {
+    -- Auto Farm
+    Enabled = false,
+    ScanRange = 5000, -- Phạm vi quét quái
+    AttackRange = 50, -- Khoảng cách tấn công
+    MaxTargets = 50, -- Số lượng mục tiêu tối đa
+    WaitAfterKill = 1, -- Chờ sau khi giết quái
+    
+    -- Bay
+    FlyHeight = 30, -- Độ cao bay trên đầu quái
+    FlySpeed = 250, -- Tốc độ bay 250 (tối đa)
+    CurrentSpeed = 250, -- Tốc độ hiện tại (mặc định 250)
+    UseFly = true,
+    
+    -- Xuyên tường
+    NoClip = true, -- Bật xuyên tường mặc định
+    AntiStuck = true, -- Chống kẹt
+    
+    -- Combat
+    CombatEnabled = true,
+    AttacksPerTarget = 3,
+    HitDelay = 0.05,
+    
+    -- Nâng cao
+    StayOnHead = true, -- Đứng trên đầu quái
+    AutoAdjustHeight = true, -- Tự điều chỉnh độ cao
+    DebugMode = false,
+    
+    -- Tính năng mới
+    GomQuai = true, -- Gom quái vào 1 chỗ
+    GomRadius = 30, -- Bán kính gom quái
+    MaxGomTargets = 4, -- Số lượng quái tối đa để gom
+    RainbowGUI = false -- Hiệu ứng cầu vồng cho GUI (bật/tắt bằng logo MB)
+}
+
+-- ==================== BIẾN ====================
+local farmConnection = nil
+local flyConnection = nil
+local noclipConnection = nil
+local rainbowConnection = nil
+local rainbowLogoConnection = nil
+local currentTarget = nil
+local targetsList = {}
+local gomTargets = {} -- Danh sách quái đang gom
+local isFlyingToTarget = false
+local isOnHead = false
+local isGomming = false -- Đang trong quá trình gom quái
+local totalKills = 0
+local startTime = os.time()
+local lastScanTime = 0
+local isWaitingForTarget = false
+
+-- Biến xuyên tường
+local noclipParts = {}
+local originalCanCollide = {}
+
+-- Biến GUI
+local MainFrame, Title, StatusLabel, KillsLabel, SpeedLabel, NoClipLabel, GomQuaiLabel
+local StartBtn, StopBtn, TargetList, NoClipToggleBtn, SpeedUpBtn, SpeedDownBtn, GomQuaiToggleBtn
+local MBBLogo, MBBLogoFrame -- Logo MB
+
+-- Module Combat
+local Net = ReplicatedStorage:FindFirstChild("Modules") and ReplicatedStorage.Modules:FindFirstChild("Net")
+local RegisterAttack = Net and Net:WaitForChild("RE/RegisterAttack", 5)
+local RegisterHit = Net and Net:WaitForChild("RE/RegisterHit", 5)
+
+-- ==================== HIỆU ỨNG RAINBOW CHO GUI ====================
+function StartRainbowGUI()
+    if rainbowConnection then
+        rainbowConnection:Disconnect()
+    end
+    
+    local hue = 0
+    rainbowConnection = RunService.Heartbeat:Connect(function()
+        if not MainFrame then return end
+        
+        hue = (hue + 0.01) % 1
+        local color = Color3.fromHSV(hue, 0.7, 0.7)
+        
+        -- Thay đổi màu nền chính
+        MainFrame.BackgroundColor3 = color
+        
+        -- Thay đổi màu tiêu đề
+        if Title then
+            Title.TextColor3 = Color3.fromHSV((hue + 0.5) % 1, 0.9, 1)
+        end
+        
+        -- Thay đổi màu các nút
+        if StartBtn then
+            StartBtn.BackgroundColor3 = Color3.fromHSV((hue + 0.2) % 1, 0.8, 0.6)
+        end
+        if StopBtn then
+            StopBtn.BackgroundColor3 = Color3.fromHSV((hue + 0.3) % 1, 0.8, 0.6)
+        end
+        if NoClipToggleBtn then
+            NoClipToggleBtn.BackgroundColor3 = Color3.fromHSV((hue + 0.4) % 1, 0.8, 0.6)
+        end
+        if GomQuaiToggleBtn then
+            GomQuaiToggleBtn.BackgroundColor3 = Color3.fromHSV((hue + 0.5) % 1, 0.8, 0.6)
+        end
+        
+        -- Thay đổi màu danh sách quái
+        if TargetList then
+            TargetList.TextColor3 = Color3.fromHSV((hue + 0.6) % 1, 0.6, 0.9)
+        end
+    end)
+    
+    Config.RainbowGUI = true
+    if MBBLogo then
+        MBBLogo.Text = "MB 🌈"
+    end
+    print("[RAINBOW] Đã bật hiệu ứng cầu vồng cho GUI")
+end
+
+function StopRainbowGUI()
+    if rainbowConnection then
+        rainbowConnection:Disconnect()
+        rainbowConnection = nil
+    end
+    
+    -- Khôi phục màu mặc định
+    if MainFrame then
+        MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+    end
+    if Title then
+        Title.TextColor3 = Color3.fromRGB(255, 100, 100)
+    end
+    if StartBtn then
+        StartBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 0)
+    end
+    if StopBtn then
+        StopBtn.BackgroundColor3 = Color3.fromRGB(180, 0, 0)
+    end
+    if NoClipToggleBtn then
+        NoClipToggleBtn.BackgroundColor3 = Config.NoClip and Color3.fromRGB(200, 0, 0) or Color3.fromRGB(0, 150, 0)
+    end
+    if GomQuaiToggleBtn then
+        GomQuaiToggleBtn.BackgroundColor3 = Config.GomQuai and Color3.fromRGB(200, 0, 0) or Color3.fromRGB(0, 150, 0)
+    end
+    if TargetList then
+        TargetList.TextColor3 = Color3.fromRGB(200, 200, 200)
+    end
+    
+    Config.RainbowGUI = false
+    if MBBLogo then
+        MBBLogo.Text = "MB"
+    end
+    print("[RAINBOW] Đã tắt hiệu ứng cầu vồng cho GUI")
+end
+
+function ToggleRainbowGUI()
+    if Config.RainbowGUI then
+        StopRainbowGUI()
+    else
+        StartRainbowGUI()
+    end
+end
+
+-- ==================== HIỆU ỨNG RAINBOW CHO LOGO MB ====================
+function StartRainbowLogo()
+    if rainbowLogoConnection then
+        rainbowLogoConnection:Disconnect()
+    end
+    
+    local hue = 0
+    rainbowLogoConnection = RunService.Heartbeat:Connect(function()
+        if not MBBLogo then return end
+        
+        hue = (hue + 0.05) % 1
+        MBBLogo.TextColor3 = Color3.fromHSV(hue, 1, 1)
+    end)
+end
+
+function StopRainbowLogo()
+    if rainbowLogoConnection then
+        rainbowLogoConnection:Disconnect()
+        rainbowLogoConnection = nil
+    end
+end
+
+-- ==================== LOGO MB ====================
+function CreateMBLogo()
+    local logoGui = Instance.new("ScreenGui")
+    logoGui.Name = "MBLogoGUI"
+    logoGui.Parent = player.PlayerGui
+    logoGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    
+    MBBLogoFrame = Instance.new("Frame")
+    MBBLogoFrame.Size = UDim2.new(0, 60, 0, 60)
+    MBBLogoFrame.Position = UDim2.new(1, -70, 0, 10)
+    MBBLogoFrame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    MBBLogoFrame.BackgroundTransparency = 0.3
+    MBBLogoFrame.Active = true
+    MBBLogoFrame.Draggable = true
+    MBBLogoFrame.Parent = logoGui
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(1, 0)
+    corner.Parent = MBBLogoFrame
+    
+    MBBLogo = Instance.new("TextButton")
+    MBBLogo.Text = "MB"
+    MBBLogo.Size = UDim2.new(1, 0, 1, 0)
+    MBBLogo.BackgroundTransparency = 1
+    MBBLogo.TextColor3 = Color3.fromRGB(255, 255, 255)
+    MBBLogo.Font = Enum.Font.GothamBlack
+    MBBLogo.TextSize = 24
+    MBBLogo.TextScaled = false
+    MBBLogo.Parent = MBBLogoFrame
+    
+    -- Bắt đầu hiệu ứng rainbow cho logo
+    StartRainbowLogo()
+    
+    -- Sự kiện click vào logo
+    MBBLogo.MouseButton1Click:Connect(function()
+        if MainFrame then
+            local isVisible = MainFrame.Visible
+            MainFrame.Visible = not isVisible
+            
+            if not isVisible then
+                -- Khi hiện GUI, bật rainbow nếu đang bật
+                if Config.RainbowGUI then
+                    StartRainbowGUI()
+                end
+                print("[LOGO] Đã hiện GUI")
+            else
+                -- Khi ẩn GUI, tắt rainbow
+                StopRainbowGUI()
+                print("[LOGO] Đã ẩn GUI")
+            end
+            
+            -- Thông báo trên logo
+            MBBLogo.Text = not isVisible and "MB" .. (Config.RainbowGUI and " 🌈" or "") or "MB"
+        end
+    end)
+    
+    -- Double click để bật/tắt rainbow GUI
+    local lastClickTime = 0
+    MBBLogo.MouseButton1Down:Connect(function()
+        local currentTime = tick()
+        if currentTime - lastClickTime < 0.5 then
+            -- Double click
+            ToggleRainbowGUI()
+            MBBLogo.Text = "MB" .. (Config.RainbowGUI and " 🌈" or "")
+        end
+        lastClickTime = currentTime
+    end)
+    
+    -- Tooltip
+    local tooltip = Instance.new("TextLabel")
+    tooltip.Text = "Click: Ẩn/Hiện GUI\nDouble Click: Bật/Tắt Rainbow"
+    tooltip.Size = UDim2.new(0, 150, 0, 40)
+    tooltip.Position = UDim2.new(0, 70, 0, 10)
+    tooltip.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    tooltip.BackgroundTransparency = 0.7
+    tooltip.TextColor3 = Color3.fromRGB(255, 255, 255)
+    tooltip.Font = Enum.Font.Gotham
+    tooltip.TextSize = 12
+    tooltip.TextWrapped = true
+    tooltip.Visible = false
+    tooltip.Parent = MBBLogoFrame
+    
+    local tooltipCorner = Instance.new("UICorner")
+    tooltipCorner.CornerRadius = UDim.new(0, 6)
+    tooltipCorner.Parent = tooltip
+    
+    -- Hiện tooltip khi hover
+    MBBLogo.MouseEnter:Connect(function()
+        tooltip.Visible = true
+    end)
+    
+    MBBLogo.MouseLeave:Connect(function()
+        tooltip.Visible = false
+    end)
+    
+    return logoGui
+end
+
+function CleanupLogo()
+    StopRainbowLogo()
+    local logoGui = player.PlayerGui:FindFirstChild("MBLogoGUI")
+    if logoGui then
+        logoGui:Destroy()
+    end
+end
+
+-- ==================== HÀM XUYÊN TƯỜNG ====================
+function EnableNoClip()
+    if not Config.NoClip then return end
+    
+    -- Lưu lại và tắt CanCollide của tất cả part trong nhân vật
+    for _, part in pairs(character:GetDescendants()) do
+        if part:IsA("BasePart") then
+            originalCanCollide[part] = part.CanCollide
+            part.CanCollide = false
+            table.insert(noclipParts, part)
+        end
+    end
+    
+    -- Kết nối để duy trì NoClip
+    if noclipConnection then
+        noclipConnection:Disconnect()
+    end
+    
+    noclipConnection = RunService.Stepped:Connect(function()
+        if not character then
+            noclipConnection:Disconnect()
+            return
+        end
+        
+        for _, part in pairs(noclipParts) do
+            if part and part.Parent then
+                part.CanCollide = false
+            end
+        end
+    end)
+    
+    print("[NO CLIP] Đã bật xuyên tường")
+end
+
+function DisableNoClip()
+    if noclipConnection then
+        noclipConnection:Disconnect()
+        noclipConnection = nil
+    end
+    
+    -- Khôi phục CanCollide gốc
+    for part, canCollide in pairs(originalCanCollide) do
+        if part and part.Parent then
+            part.CanCollide = canCollide
+        end
+    end
+    
+    noclipParts = {}
+    originalCanCollide = {}
+    
+    print("[NO CLIP] Đã tắt xuyên tường")
+end
+
+function ToggleNoClip()
+    Config.NoClip = not Config.NoClip
+    
+    if Config.NoClip then
+        EnableNoClip()
+        if NoClipLabel then
+            NoClipLabel.Text = "Xuyên tường: BẬT"
+            NoClipLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+        end
+        if NoClipToggleBtn then
+            NoClipToggleBtn.Text = "🚫 TẮT XUYÊN TƯỜNG"
+            NoClipToggleBtn.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
+        end
+    else
+        DisableNoClip()
+        if NoClipLabel then
+            NoClipLabel.Text = "Xuyên tường: TẮT"
+            NoClipLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+        end
+        if NoClipToggleBtn then
+            NoClipToggleBtn.Text = "🚀 BẬT XUYÊN TƯỜNG"
+            NoClipToggleBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+        end
+    end
+end
+
+-- ==================== HÀM GOM QUÁI ====================
+function GomQuaiToPosition(position)
+    if not Config.GomQuai or isGomming then return end
+    
+    isGomming = true
+    print("[GOM QUÁI] Bắt đầu gom quái vào vị trí...")
+    
+    -- Tìm các quái trong bán kính
+    local foundTargets = {}
+    local charPos = position or humanoidRootPart.Position
+    
+    -- Quét trong Workspace
+    for _, npc in pairs(Workspace:GetChildren()) do
+        if IsValidNPC(npc) then
+            local rootPart = npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("PrimaryPart")
+            if rootPart then
+                local distance = (rootPart.Position - charPos).Magnitude
+                if distance <= Config.GomRadius * 2 then -- Tìm trong bán kính rộng hơn
+                    table.insert(foundTargets, {
+                        model = npc,
+                        rootPart = rootPart,
+                        distance = distance
+                    })
+                end
+            end
+        end
+    end
+    
+    -- Quét trong folder Enemies
+    local enemiesFolder = Workspace:FindFirstChild("Enemies")
+    if enemiesFolder then
+        for _, npc in pairs(enemiesFolder:GetChildren()) do
+            if IsValidNPC(npc) then
+                local rootPart = npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("PrimaryPart")
+                if rootPart then
+                    local distance = (rootPart.Position - charPos).Magnitude
+                    if distance <= Config.GomRadius * 2 then
+                        table.insert(foundTargets, {
+                            model = npc,
+                            rootPart = rootPart,
+                            distance = distance
+                        })
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Sắp xếp theo khoảng cách
+    table.sort(foundTargets, function(a, b)
+        return a.distance < b.distance
+    end)
+    
+    -- Giới hạn số lượng
+    if #foundTargets > Config.MaxGomTargets then
+        for i = Config.MaxGomTargets + 1, #foundTargets do
+            foundTargets[i] = nil
+        end
+    end
+    
+    -- Lưu danh sách quái cần gom
+    gomTargets = foundTargets
+    
+    -- Gom từng con quái về vị trí
+    for i, target in ipairs(gomTargets) do
+        if target and target.model and target.rootPart then
+            local npcHumanoid = target.model:FindFirstChildOfClass("Humanoid")
+            if npcHumanoid and npcHumanoid.Health > 0 then
+                print(string.format("[GOM QUÁI] Đang gom quái %d/%d: %s", i, #gomTargets, target.model.Name))
+                
+                -- Tính vị trí xung quanh player
+                local angle = (i / #gomTargets) * math.pi * 2
+                local offset = Vector3.new(math.cos(angle) * 10, 0, math.sin(angle) * 10)
+                local targetPosition = (position or humanoidRootPart.Position) + offset
+                
+                -- Di chuyển quái về vị trí (giả lập)
+                task.spawn(function()
+                    local startTime = tick()
+                    while tick() - startTime < 3 do -- Thời gian tối đa 3 giây
+                        if not target.model or not target.rootPart then break end
+                        if npcHumanoid.Health <= 0 then break end
+                        
+                        -- Đẩy quái về phía vị trí
+                        local direction = (targetPosition - target.rootPart.Position).Unit
+                        target.rootPart.Velocity = direction * 30
+                        
+                        task.wait(0.1)
+                    end
+                end)
+            end
+        end
+    end
+    
+    task.wait(2) -- Chờ 2 giây để quái được gom
+    isGomming = false
+    print(string.format("[GOM QUÁI] Đã gom xong %d quái", #gomTargets))
+end
+
+function ToggleGomQuai()
+    Config.GomQuai = not Config.GomQuai
+    
+    if Config.GomQuai then
+        if GomQuaiLabel then
+            GomQuaiLabel.Text = "Gom quái: BẬT"
+            GomQuaiLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+        end
+        if GomQuaiToggleBtn then
+            GomQuaiToggleBtn.Text = "🚫 TẮT GOM QUÁI"
+            GomQuaiToggleBtn.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
+        end
+    else
+        if GomQuaiLabel then
+            GomQuaiLabel.Text = "Gom quái: TẮT"
+            GomQuaiLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+        end
+        if GomQuaiToggleBtn then
+            GomQuaiToggleBtn.Text = "🌀 BẬT GOM QUÁI"
+            GomQuaiToggleBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+        end
+    end
+    
+    print("[GOM QUÁI] " .. (Config.GomQuai and "BẬT" or "TẮT"))
+end
+
+-- ==================== HÀM QUÉT QUÁI ====================
+function IsValidNPC(npc)
+    if not npc then return false end
+    if not npc:IsA("Model") then return false end
+    
+    local humanoid = npc:FindFirstChildOfClass("Humanoid")
+    local rootPart = npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("PrimaryPart")
+    
+    if not humanoid or not rootPart then return false end
+    if humanoid.Health <= 0 then return false end
+    
+    -- Kiểm tra xem có phải là quái không
+    local isEnemy = false
+    local npcName = npc.Name:lower()
+    
+    local enemyKeywords = {
+        "bandit", "monkey", "gorilla", "pirate", "brute",
+        "marine", "soldier", "guard", "enemy", "mob",
+        "zombie", "skeleton", "creature", "beast", "monster",
+        "knight", "assassin", "archer", "mage", "boss"
+    }
+    
+    for _, keyword in pairs(enemyKeywords) do
+        if string.find(npcName, keyword) then
+            isEnemy = true
+            break
+        end
+    end
+    
+    -- Kiểm tra folder
+    local parent = npc.Parent
+    if parent and (parent.Name == "Enemies" or parent.Name == "NPCs" or parent.Name:find("Enemy")) then
+        isEnemy = true
+    end
+    
+    return isEnemy
+end
+
+function ScanForTargets()
+    local foundTargets = {}
+    local charPos = humanoidRootPart.Position
+    
+    -- Quét trong Workspace
+    for _, npc in pairs(Workspace:GetChildren()) do
+        if IsValidNPC(npc) then
+            local rootPart = npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("PrimaryPart")
+            if rootPart then
+                local distance = (rootPart.Position - charPos).Magnitude
+                if distance <= Config.ScanRange then
+                    table.insert(foundTargets, {
+                        model = npc,
+                        rootPart = rootPart,
+                        distance = distance,
+                        health = npc:FindFirstChildOfClass("Humanoid").Health,
+                        maxHealth = npc:FindFirstChildOfClass("Humanoid").MaxHealth
+                    })
+                end
+            end
+        end
+    end
+    
+    -- Quét trong folder Enemies (nếu có)
+    local enemiesFolder = Workspace:FindFirstChild("Enemies")
+    if enemiesFolder then
+        for _, npc in pairs(enemiesFolder:GetChildren()) do
+            if IsValidNPC(npc) then
+                local rootPart = npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("PrimaryPart")
+                if rootPart then
+                    local distance = (rootPart.Position - charPos).Magnitude
+                    if distance <= Config.ScanRange then
+                        table.insert(foundTargets, {
+                            model = npc,
+                            rootPart = rootPart,
+                            distance = distance,
+                            health = npc:FindFirstChildOfClass("Humanoid").Health,
+                            maxHealth = npc:FindFirstChildOfClass("Humanoid").MaxHealth
+                        })
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Sắp xếp theo khoảng cách
+    table.sort(foundTargets, function(a, b)
+        return a.distance < b.distance
+    end)
+    
+    -- Giới hạn số lượng
+    if #foundTargets > Config.MaxTargets then
+        for i = Config.MaxTargets + 1, #foundTargets do
+            foundTargets[i] = nil
+        end
+    end
+    
+    return foundTargets
+end
+
+function GetBestTarget()
+    if #targetsList == 0 then
+        targetsList = ScanForTargets()
+    end
+    
+    -- Tìm quái còn sống đầu tiên trong danh sách
+    for i = 1, #targetsList do
+        local target = targetsList[i]
+        if target and target.model and target.model.Parent then
+            local humanoid = target.model:FindFirstChildOfClass("Humanoid")
+            if humanoid and humanoid.Health > 0 then
+                return target
+            else
+                -- Quái đã chết, xóa khỏi danh sách
+                table.remove(targetsList, i)
+                return GetBestTarget()
+            end
+        else
+            -- Quái không còn tồn tại
+            table.remove(targetsList, i)
+            return GetBestTarget()
+        end
+    end
+    
+    -- Nếu không tìm thấy, quét lại
+    targetsList = ScanForTargets()
+    return GetBestTarget()
+end
+
+-- ==================== HÀM BAY ====================
+function FlyToTarget(targetPosition)
+    if not Config.UseFly or isFlyingToTarget then return end
+    
+    isFlyingToTarget = true
+    isOnHead = false
+    print("[AUTO FARM] Đang bay đến mục tiêu với tốc độ " .. Config.CurrentSpeed .. "...")
+    
+    local targetPos = targetPosition + Vector3.new(0, Config.FlyHeight, 0)
+    
+    if flyConnection then
+        flyConnection:Disconnect()
+    end
+    
+    flyConnection = RunService.Heartbeat:Connect(function()
+        if not Config.Enabled or not character or humanoid.Health <= 0 then
+            if flyConnection then
+                flyConnection:Disconnect()
+                flyConnection = nil
+            end
+            isFlyingToTarget = false
+            return
+        end
+        
+        local currentPos = humanoidRootPart.Position
+        local direction = (targetPos - currentPos).Unit
+        local distance = (targetPos - currentPos).Magnitude
+        
+        if distance > 5 then
+            local velocity = direction * Config.CurrentSpeed
+            humanoidRootPart.Velocity = Vector3.new(velocity.X, velocity.Y, velocity.Z)
+            
+            -- Điều chỉnh độ cao nếu cần
+            if Config.AutoAdjustHeight and currentTarget then
+                local targetCurrentPos = currentTarget.rootPart.Position
+                local desiredHeight = targetCurrentPos.Y + Config.FlyHeight
+                local heightDiff = desiredHeight - currentPos.Y
+                
+                if math.abs(heightDiff) > 5 then
+                    humanoidRootPart.Velocity = Vector3.new(velocity.X, heightDiff * 2, velocity.Z)
+                end
+            end
+        else
+            -- Đã đến đích
+            if flyConnection then
+                flyConnection:Disconnect()
+                flyConnection = nil
+            end
+            isFlyingToTarget = false
+            isOnHead = true
+            
+            -- Đứng trên đầu quái
+            if Config.StayOnHead then
+                StayOnTargetHead()
+            end
+            
+            print("[AUTO FARM] Đã đến mục tiêu")
+        end
+    end)
+end
+
+function StayOnTargetHead()
+    if not currentTarget or not Config.StayOnHead then return end
+    
+    if flyConnection then
+        flyConnection:Disconnect()
+    end
+    
+    flyConnection = RunService.Heartbeat:Connect(function()
+        if not currentTarget or not currentTarget.model or not currentTarget.rootPart then
+            if flyConnection then
+                flyConnection:Disconnect()
+                flyConnection = nil
+            end
+            return
+        end
+        
+        local targetHumanoid = currentTarget.model:FindFirstChildOfClass("Humanoid")
+        if not targetHumanoid or targetHumanoid.Health <= 0 then
+            if flyConnection then
+                flyConnection:Disconnect()
+                flyConnection = nil
+            end
+            isOnHead = false
+            return
+        end
+        
+        -- Luôn đứng trên đầu quái
+        local targetPos = currentTarget.rootPart.Position
+        local headPosition = targetPos + Vector3.new(0, Config.FlyHeight, 0)
+        
+        humanoidRootPart.CFrame = CFrame.new(headPosition)
+        humanoidRootPart.Velocity = Vector3.new(0, 0, 0)
+    end)
+end
+
+function ChangeSpeed(amount)
+    local oldSpeed = Config.CurrentSpeed
+    Config.CurrentSpeed = math.clamp(Config.CurrentSpeed + amount, 50, 250) -- Giới hạn từ 50-250
+    
+    if SpeedLabel then
+        SpeedLabel.Text = "Tốc độ bay: " .. Config.CurrentSpeed
+        if Config.CurrentSpeed == 250 then
+            SpeedLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+        elseif Config.CurrentSpeed >= 200 then
+            SpeedLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
+        else
+            SpeedLabel.TextColor3 = Color3.fromRGB(150, 200, 255)
+        end
+    end
+    
+    if oldSpeed ~= Config.CurrentSpeed then
+        print("[TỐC ĐỘ] Đã thay đổi: " .. Config.CurrentSpeed)
+    end
+end
+
+-- ==================== HÀM COMBAT (ĐÃ THÊM GOM QUÁI) ====================
+function AttackTarget()
+    if not Config.CombatEnabled then return false end
+    
+    if not currentTarget or not currentTarget.model or not currentTarget.rootPart then return false end
+    
+    local npcHumanoid = currentTarget.model:FindFirstChildOfClass("Humanoid")
+    if not npcHumanoid or npcHumanoid.Health <= 0 then return false end
+    
+    print("[AUTO FARM] Đang tấn công: " .. currentTarget.model.Name)
+    
+    -- Nếu bật gom quái, gom quái trước khi đánh
+    if Config.GomQuai and not isGomming and #gomTargets == 0 then
+        GomQuaiToPosition(currentTarget.rootPart.Position)
+        task.wait(1) -- Chờ 1 giây để gom quái
+    end
+    
+    -- Tấn công mục tiêu chính và các quái đã gom
+    local allTargets = {currentTarget}
+    for _, target in ipairs(gomTargets) do
+        if target and target.model and target.rootPart then
+            local targetHumanoid = target.model:FindFirstChildOfClass("Humanoid")
+            if targetHumanoid and targetHumanoid.Health > 0 then
+                table.insert(allTargets, target)
+            end
+        end
+    end
+    
+    -- Tấn công tất cả các mục tiêu
+    for i, target in ipairs(allTargets) do
+        if i > Config.MaxGomTargets then break end -- Giới hạn số lượng
+        
+        if target and target.model and target.rootPart then
+            local targetHumanoid = target.model:FindFirstChildOfClass("Humanoid")
+            if targetHumanoid and targetHumanoid.Health > 0 then
+                print(string.format("[AUTO FARM] Tấn công quái %d: %s", i, target.model.Name))
+                
+                -- Sử dụng module combat nếu có
+                if RegisterAttack and RegisterHit then
+                    RegisterAttack:FireServer()
+                    for j = 1, math.floor(Config.AttacksPerTarget / #allTargets) do
+                        if targetHumanoid.Health > 0 then
+                            RegisterHit:FireServer(target.rootPart)
+                            task.wait(Config.HitDelay)
+                        else
+                            break
+                        end
+                    end
+                else
+                    -- Tấn công trực tiếp
+                    for j = 1, math.floor(Config.AttacksPerTarget / #allTargets) do
+                        if targetHumanoid.Health > 0 then
+                            targetHumanoid:TakeDamage(50)
+                            task.wait(Config.HitDelay)
+                        else
+                            break
+                        end
+                    end
+                end
+                
+                -- Kiểm tra nếu quái chết
+                if targetHumanoid.Health <= 0 then
+                    totalKills = totalKills + 1
+                    print("[AUTO FARM] Đã tiêu diệt: " .. target.model.Name)
+                    
+                    -- Xóa khỏi danh sách gom
+                    for k, gomTarget in ipairs(gomTargets) do
+                        if gomTarget.model == target.model then
+                            table.remove(gomTargets, k)
+                            break
+                        end
+                    end
+                    
+                    -- Xóa khỏi danh sách chính
+                    for k, mainTarget in ipairs(targetsList) do
+                        if mainTarget.model == target.model then
+                            table.remove(targetsList, k)
+                            break
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Xóa danh sách gom sau khi tấn công
+    if #allTargets > 1 then
+        print(string.format("[GOM QUÁI] Đã tấn công %d quái cùng lúc!", #allTargets))
+        gomTargets = {} -- Reset danh sách gom
+    end
+    
+    return true
+end
+
+-- ==================== VÒNG LẶP AUTO FARM ====================
+function AutoFarmLoop()
+    if not Config.Enabled or not character or humanoid.Health <= 0 then return end
+    
+    if currentTarget then
+        -- Kiểm tra mục tiêu hiện tại
+        local targetHumanoid = currentTarget.model:FindFirstChildOfClass("Humanoid")
+        
+        if not targetHumanoid or targetHumanoid.Health <= 0 then
+            -- Mục tiêu đã chết
+            print("[AUTO FARM] Đã tiêu diệt: " .. currentTarget.model.Name)
+            totalKills = totalKills + 1
+            
+            -- Xóa mục tiêu đã chết khỏi danh sách
+            for i, target in ipairs(targetsList) do
+                if target.model == currentTarget.model then
+                    table.remove(targetsList, i)
+                    break
+                end
+            end
+            
+            currentTarget = nil
+            isOnHead = false
+            isFlyingToTarget = false
+            
+            -- Dừng bay
+            if flyConnection then
+                flyConnection:Disconnect()
+                flyConnection = nil
+            end
+            
+            UpdateGUI()
+            task.wait(Config.WaitAfterKill)
+            -- KHÔNG RETURN Ở ĐÂY! Để nó tiếp tục xuống dưới tìm mục tiêu mới
+        else
+            -- Tính khoảng cách đến mục tiêu
+            local distance = (currentTarget.rootPart.Position - humanoidRootPart.Position).Magnitude
+            
+            if distance > Config.AttackRange then
+                -- Bay đến mục tiêu nếu còn xa
+                if not isFlyingToTarget then
+                    FlyToTarget(currentTarget.rootPart.Position)
+                end
+            else
+                -- Đã đến gần
+                if Config.StayOnHead and not isOnHead then
+                    StayOnTargetHead()
+                end
+                
+                -- Tấn công
+                AttackTarget()
+            end
+        end
+    end
+    
+    -- Nếu không có mục tiêu hiện tại (hoặc mục tiêu vừa chết), tìm mục tiêu mới
+    if not currentTarget and not isWaitingForTarget then
+        local currentTime = tick()
+        
+        -- Giới hạn tần suất quét (chỉ quét sau mỗi 3 giây)
+        if currentTime - lastScanTime >= 3 then
+            isWaitingForTarget = true
+            lastScanTime = currentTime
+            
+            -- Tìm mục tiêu mới
+            currentTarget = GetBestTarget()
+            if currentTarget then
+                print("[AUTO FARM] Đã tìm thấy mục tiêu: " .. currentTarget.model.Name)
+                UpdateGUI()
+                -- Tự động bay đến mục tiêu mới
+                if Config.UseFly then
+                    FlyToTarget(currentTarget.rootPart.Position)
+                end
+                isWaitingForTarget = false
+            else
+                print("[AUTO FARM] Không tìm thấy quái trong phạm vi. Đang chờ...")
+                -- Đợi 3 giây trước khi quét lại
+                task.wait(3)
+                isWaitingForTarget = false
+            end
+        end
+    end
+end
+
+-- ==================== GUI ====================
+function CreateGUI()
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "AutoFarmGUI"
+    ScreenGui.Parent = player.PlayerGui
+    
+    -- Khung chính
+    MainFrame = Instance.new("Frame")
+    MainFrame.Size = UDim2.new(0, 500, 0, 600)
+    MainFrame.Position = UDim2.new(0.5, -250, 0.5, -300)
+    MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+    MainFrame.BackgroundTransparency = 0.1
+    MainFrame.Active = true
+    MainFrame.Draggable = true
+    MainFrame.Parent = ScreenGui
+    
+    local UICorner = Instance.new("UICorner")
+    UICorner.CornerRadius = UDim.new(0, 12)
+    UICorner.Parent = MainFrame
+    
+    -- Tiêu đề
+    Title = Instance.new("TextLabel")
+    Title.Text = "🚀 AUTO FARM 5000 - Tốc độ 250 - by Mạc Bách 🚀"
+    Title.Size = UDim2.new(1, 0, 0, 45)
+    Title.Position = UDim2.new(0, 0, 0, 10)
+    Title.BackgroundTransparency = 1
+    Title.TextColor3 = Color3.fromRGB(255, 100, 100)
+    Title.Font = Enum.Font.GothamBold
+    Title.TextSize = 18
+    Title.TextStrokeTransparency = 0.5
+    Title.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    Title.Parent = MainFrame
+    
+    -- Thông tin
+    StatusLabel = Instance.new("TextLabel")
+    StatusLabel.Text = "Trạng thái: Đang tắt"
+    StatusLabel.Size = UDim2.new(1, -20, 0, 25)
+    StatusLabel.Position = UDim2.new(0, 10, 0, 65)
+    StatusLabel.BackgroundTransparency = 1
+    StatusLabel.TextColor3 = Color3.fromRGB(150, 255, 150)
+    StatusLabel.Font = Enum.Font.Gotham
+    StatusLabel.TextSize = 14
+    StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+    StatusLabel.Parent = MainFrame
+    
+    KillsLabel = Instance.new("TextLabel")
+    KillsLabel.Text = "Số quái đã diệt: 0"
+    KillsLabel.Size = UDim2.new(1, -20, 0, 25)
+    KillsLabel.Position = UDim2.new(0, 10, 0, 90)
+    KillsLabel.BackgroundTransparency = 1
+    KillsLabel.TextColor3 = Color3.fromRGB(150, 200, 255)
+    KillsLabel.Font = Enum.Font.Gotham
+    KillsLabel.TextSize = 14
+    KillsLabel.TextXAlignment = Enum.TextXAlignment.Left
+    KillsLabel.Parent = MainFrame
+    
+    SpeedLabel = Instance.new("TextLabel")
+    SpeedLabel.Text = "Tốc độ bay: " .. Config.CurrentSpeed
+    SpeedLabel.Size = UDim2.new(1, -20, 0, 25)
+    SpeedLabel.Position = UDim2.new(0, 10, 0, 115)
+    SpeedLabel.BackgroundTransparency = 1
+    SpeedLabel.TextColor3 = Color3.fromRGB(150, 200, 255)
+    SpeedLabel.Font = Enum.Font.Gotham
+    SpeedLabel.TextSize = 14
+    SpeedLabel.TextXAlignment = Enum.TextXAlignment.Left
+    SpeedLabel.Parent = MainFrame
+    
+    NoClipLabel = Instance.new("TextLabel")
+    NoClipLabel.Text = Config.NoClip and "Xuyên tường: BẬT" or "Xuyên tường: TẮT"
+    NoClipLabel.Size = UDim2.new(1, -20, 0, 25)
+    NoClipLabel.Position = UDim2.new(0, 10, 0, 140)
+    NoClipLabel.BackgroundTransparency = 1
+    NoClipLabel.TextColor3 = Config.NoClip and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 100, 100)
+    NoClipLabel.Font = Enum.Font.Gotham
+    NoClipLabel.TextSize = 14
+    NoClipLabel.TextXAlignment = Enum.TextXAlignment.Left
+    NoClipLabel.Parent = MainFrame
+    
+    GomQuaiLabel = Instance.new("TextLabel")
+    GomQuaiLabel.Text = Config.GomQuai and "Gom quái: BẬT" or "Gom quái: TẮT"
+    GomQuaiLabel.Size = UDim2.new(1, -20, 0, 25)
+    GomQuaiLabel.Position = UDim2.new(0, 10, 0, 165)
+    GomQuaiLabel.BackgroundTransparency = 1
+    GomQuaiLabel.TextColor3 = Config.GomQuai and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 100, 100)
+    GomQuaiLabel.Font = Enum.Font.Gotham
+    GomQuaiLabel.TextSize = 14
+    GomQuaiLabel.TextXAlignment = Enum.TextXAlignment.Left
+    GomQuaiLabel.Parent = MainFrame
+    
+    -- Nút điều khiển chính
+    StartBtn = Instance.new("TextButton")
+    StartBtn.Text = "▶ BẬT AUTO FARM"
+    StartBtn.Size = UDim2.new(0.9, 0, 0, 50)
+    StartBtn.Position = UDim2.new(0.05, 0, 0.25, 0)
+    StartBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 0)
+    StartBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    StartBtn.Font = Enum.Font.GothamBold
+    StartBtn.TextSize = 16
+    
+    local startCorner = Instance.new("UICorner")
+    startCorner.CornerRadius = UDim.new(0, 8)
+    startCorner.Parent = StartBtn
+    
+    StartBtn.Parent = MainFrame
+    
+    StopBtn = Instance.new("TextButton")
+    StopBtn.Text = "⏸ DỪNG AUTO FARM"
+    StopBtn.Size = UDim2.new(0.9, 0, 0, 50)
+    StopBtn.Position = UDim2.new(0.05, 0, 0.35, 0)
+    StopBtn.BackgroundColor3 = Color3.fromRGB(180, 0, 0)
+    StopBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    StopBtn.Font = Enum.Font.GothamBold
+    StopBtn.TextSize = 16
+    StopBtn.Visible = false
+    
+    local stopCorner = Instance.new("UICorner")
+    stopCorner.CornerRadius = UDim.new(0, 8)
+    stopCorner.Parent = StopBtn
+    
+    StopBtn.Parent = MainFrame
+    
+    -- Nút xuyên tường
+    NoClipToggleBtn = Instance.new("TextButton")
+    NoClipToggleBtn.Text = Config.NoClip and "🚫 TẮT XUYÊN TƯỜNG" or "🚀 BẬT XUYÊN TƯỜNG"
+    NoClipToggleBtn.Size = UDim2.new(0.43, 0, 0, 40)
+    NoClipToggleBtn.Position = UDim2.new(0.05, 0, 0.45, 0)
+    NoClipToggleBtn.BackgroundColor3 = Config.NoClip and Color3.fromRGB(200, 0, 0) or Color3.fromRGB(0, 150, 0)
+    NoClipToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    NoClipToggleBtn.Font = Enum.Font.GothamBold
+    NoClipToggleBtn.TextSize = 12
+    
+    local noclipCorner = Instance.new("UICorner")
+    noclipCorner.CornerRadius = UDim.new(0, 8)
+    noclipCorner.Parent = NoClipToggleBtn
+    
+    NoClipToggleBtn.Parent = MainFrame
+    
+    -- Nút gom quái
+    GomQuaiToggleBtn = Instance.new("TextButton")
+    GomQuaiToggleBtn.Text = Config.GomQuai and "🚫 TẮT GOM QUÁI" or "🌀 BẬT GOM QUÁI"
+    GomQuaiToggleBtn.Size = UDim2.new(0.43, 0, 0, 40)
+    GomQuaiToggleBtn.Position = UDim2.new(0.52, 0, 0.45, 0)
+    GomQuaiToggleBtn.BackgroundColor3 = Config.GomQuai and Color3.fromRGB(200, 0, 0) or Color3.fromRGB(0, 150, 0)
+    GomQuaiToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    GomQuaiToggleBtn.Font = Enum.Font.GothamBold
+    GomQuaiToggleBtn.TextSize = 12
+    
+    local gomquaiCorner = Instance.new("UICorner")
+    gomquaiCorner.CornerRadius = UDim.new(0, 8)
+    gomquaiCorner.Parent = GomQuaiToggleBtn
+    
+    GomQuaiToggleBtn.Parent = MainFrame
+    
+    -- Nút điều chỉnh tốc độ
+    SpeedUpBtn = Instance.new("TextButton")
+    SpeedUpBtn.Text = "📈 TĂNG TỐC +10"
+    SpeedUpBtn.Size = UDim2.new(0.43, 0, 0, 35)
+    SpeedUpBtn.Position = UDim2.new(0.05, 0, 0.55, 0)
+    SpeedUpBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 150)
+    SpeedUpBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    SpeedUpBtn.Font = Enum.Font.Gotham
+    SpeedUpBtn.TextSize = 12
+    
+    local speedUpCorner = Instance.new("UICorner")
+    speedUpCorner.CornerRadius = UDim.new(0, 6)
+    speedUpCorner.Parent = SpeedUpBtn
+    
+    SpeedUpBtn.Parent = MainFrame
+    
+    SpeedDownBtn = Instance.new("TextButton")
+    SpeedDownBtn.Text = "📉 GIẢM TỐC -10"
+    SpeedDownBtn.Size = UDim2.new(0.43, 0, 0, 35)
+    SpeedDownBtn.Position = UDim2.new(0.52, 0, 0.55, 0)
+    SpeedDownBtn.BackgroundColor3 = Color3.fromRGB(150, 0, 150)
+    SpeedDownBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    SpeedDownBtn.Font = Enum.Font.Gotham
+    SpeedDownBtn.TextSize = 12
+    
+    local speedDownCorner = Instance.new("UICorner")
+    speedDownCorner.CornerRadius = UDim.new(0, 6)
+    speedDownCorner.Parent = SpeedDownBtn
+    
+    SpeedDownBtn.Parent = MainFrame
+    
+    -- Danh sách mục tiêu
+    local targetsTitle = Instance.new("TextLabel")
+    targetsTitle.Text = "🎯 DANH SÁCH QUÁI TRONG PHẠM VI 5000"
+    targetsTitle.Size = UDim2.new(1, -20, 0, 30)
+    targetsTitle.Position = UDim2.new(0, 10, 0.65, 0)
+    targetsTitle.BackgroundTransparency = 1
+    targetsTitle.TextColor3 = Color3.fromRGB(255, 200, 100)
+    targetsTitle.Font = Enum.Font.GothamBold
+    targetsTitle.TextSize = 14
+    targetsTitle.TextXAlignment = Enum.TextXAlignment.Left
+    targetsTitle.Parent = MainFrame
+    
+    -- Frame chứa danh sách
+    local listFrame = Instance.new("Frame")
+    listFrame.Size = UDim2.new(1, -20, 0, 200)
+    listFrame.Position = UDim2.new(0, 10, 0.7, 0)
+    listFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+    listFrame.BorderSizePixel = 0
+    
+    local listCorner = Instance.new("UICorner")
+    listCorner.CornerRadius = UDim.new(0, 8)
+    listCorner.Parent = listFrame
+    
+    listFrame.Parent = MainFrame
+    
+    -- Scrolling frame
+    local scrollingFrame = Instance.new("ScrollingFrame")
+    scrollingFrame.Size = UDim2.new(1, 0, 1, 0)
+    scrollingFrame.BackgroundTransparency = 1
+    scrollingFrame.BorderSizePixel = 0
+    scrollingFrame.ScrollBarThickness = 6
+    scrollingFrame.Parent = listFrame
+    
+    TargetList = Instance.new("TextLabel")
+    TargetList.Text = "Đang quét..."
+    TargetList.Size = UDim2.new(1, -10, 0, 30)
+    TargetList.Position = UDim2.new(0, 5, 0, 5)
+    TargetList.BackgroundTransparency = 1
+    TargetList.TextColor3 = Color3.fromRGB(200, 200, 200)
+    TargetList.Font = Enum.Font.Gotham
+    TargetList.TextSize = 12
+    TargetList.TextXAlignment = Enum.TextXAlignment.Left
+    TargetList.TextYAlignment = Enum.TextYAlignment.Top
+    TargetList.TextWrapped = true
+    TargetList.Parent = scrollingFrame
+    
+    -- Hướng dẫn
+    local helpLabel = Instance.new("TextLabel")
+    helpLabel.Text = "📌 Auto Farm sẽ tự động quét quái trong 5000 studs,\nbay đến từng con và đánh chết.\n\n⚡ Tốc độ mặc định: 250 | Xuyên tường: " .. (Config.NoClip and "BẬT" or "TẮT") .. "\n🌀 Gom quái: " .. (Config.GomQuai and "BẬT" or "TẮT") .. "\n🌈 Logo MB: Ẩn/Hiện GUI & Bật/Tắt Rainbow"
+    helpLabel.Size = UDim2.new(1, -20, 0, 90)
+    helpLabel.Position = UDim2.new(0, 10, 0.95, -95)
+    helpLabel.BackgroundTransparency = 1
+    helpLabel.TextColor3 = Color3.fromRGB(150, 200, 255)
+    helpLabel.Font = Enum.Font.Gotham
+    helpLabel.TextSize = 12
+    helpLabel.TextXAlignment = Enum.TextXAlignment.Left
+    helpLabel.TextWrapped = true
+    helpLabel.Parent = MainFrame
+    
+    return ScreenGui
+end
+
+function UpdateGUI()
+    if StatusLabel then
+        if Config.Enabled then
+            StatusLabel.Text = "Trạng thái: Đang chạy"
+            StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+            
+            if currentTarget then
+                local hpPercent = math.floor((currentTarget.health / currentTarget.maxHealth) * 100)
+                StatusLabel.Text = StatusLabel.Text .. "\nMục tiêu: " .. currentTarget.model.Name .. 
+                                  " (HP: " .. hpPercent .. "%)"
+            end
+        else
+            StatusLabel.Text = "Trạng thái: Đang tắt"
+            StatusLabel.TextColor3 = Color3.fromRGB(150, 255, 150)
+        end
+    end
+    
+    if KillsLabel then
+        KillsLabel.Text = "Số quái đã diệt: " .. totalKills
+    end
+    
+    if SpeedLabel then
+        SpeedLabel.Text = "Tốc độ bay: " .. Config.CurrentSpeed
+        if Config.CurrentSpeed == 250 then
+            SpeedLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+        elseif Config.CurrentSpeed >= 200 then
+            SpeedLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
+        else
+            SpeedLabel.TextColor3 = Color3.fromRGB(150, 200, 255)
+        end
+    end
+    
+    if NoClipLabel then
+        NoClipLabel.Text = Config.NoClip and "Xuyên tường: BẬT" or "Xuyên tường: TẮT"
+        NoClipLabel.TextColor3 = Config.NoClip and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 100, 100)
+    end
+    
+    if GomQuaiLabel then
+        GomQuaiLabel.Text = Config.GomQuai and "Gom quái: BẬT" or "Gom quái: TẮT"
+        GomQuaiLabel.TextColor3 = Config.GomQuai and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 100, 100)
+    end
+    
+    -- Cập nhật danh sách quái
+    if TargetList then
+        local targets = ScanForTargets()
+        local listText = ""
+        
+        if #targets == 0 then
+            listText = "❌ Không tìm thấy quái trong phạm vi"
+        else
+            for i = 1, math.min(#targets, 8) do
+                local target = targets[i]
+                local healthPercent = math.floor((target.health / target.maxHealth) * 100)
+                local healthColor = healthPercent > 50 and "🟢" or healthPercent > 20 and "🟡" or "🔴"
+                
+                listText = listText .. string.format("%s %d. %s\n   HP: %d%% | Khoảng cách: %.1f studs\n\n", 
+                    healthColor, i, target.model.Name, healthPercent, target.distance)
+            end
+            
+            if #targets > 8 then
+                listText = listText .. string.format("... và %d quái khác", #targets - 8)
+            end
+        end
+        
+        TargetList.Text = listText
+        TargetList.Size = UDim2.new(1, -10, 0, #targets * 40 + 50)
+    end
+end
+
+-- ==================== ĐIỀU KHIỂN ====================
+function StartAutoFarm()
+    Config.Enabled = true
+    print("[AUTO FARM] Đã bật Auto Farm")
+    print("  - Tốc độ: " .. Config.CurrentSpeed)
+    print("  - Xuyên tường: " .. (Config.NoClip and "BẬT" or "TẮT"))
+    print("  - Gom quái: " .. (Config.GomQuai and "BẬT" or "TẮT"))
+    
+    StartBtn.Visible = false
+    StopBtn.Visible = true
+    
+    -- Reset biến thời gian
+    lastScanTime = tick() - 3
+    isWaitingForTarget = false
+    
+    -- Bật xuyên tường nếu được cấu hình
+    if Config.NoClip then
+        EnableNoClip()
+    end
+    
+    UpdateGUI()
+    
+    -- Bắt đầu vòng lặp
+    if farmConnection then
+        farmConnection:Disconnect()
+    end
+    
+    farmConnection = RunService.Heartbeat:Connect(function()
+        AutoFarmLoop()
+    end)
+end
+
+function StopAutoFarm()
+    Config.Enabled = false
+    print("[AUTO FARM] Đã dừng Auto Farm")
+    
+    StartBtn.Visible = true
+    StopBtn.Visible = false
+    
+    currentTarget = nil
+    isFlyingToTarget = false
+    isOnHead = false
+    isWaitingForTarget = false
+    isGomming = false
+    gomTargets = {}
+    
+    -- Dừng bay
+    if flyConnection then
+        flyConnection:Disconnect()
+        flyConnection = nil
+    end
+    
+    -- Dừng farm
+    if farmConnection then
+        farmConnection:Disconnect()
+        farmConnection = nil
+    end
+    
+    -- Tắt xuyên tường
+    DisableNoClip()
+    
+    humanoidRootPart.Velocity = Vector3.new(0, 0, 0)
+    
+    UpdateGUI()
+end
+
+-- ==================== KHỞI ĐỘNG ====================
+function Initialize()
+    print("🎮 Auto Farm Quét Quái 5000 Studs - by Mạc Bách")
+    print("🚀 TÍNH NĂNG NÂNG CAO:")
+    print("  - Quét quái trong phạm vi 5000 studs")
+    print("  - Bay tốc độ 250 mặc định")
+    print("  - Xuyên tường (NoClip)")
+    print("  - Đứng trên đầu quái")
+    print("  - Tự động tấn công cho đến khi chết")
+    print("  - Chuyển sang mục tiêu tiếp theo")
+    print("  - GOM QUÁI: Gom 4 quái vào 1 chỗ để đánh")
+    print("  - LOGO MB: Hiệu ứng Rainbow + Ẩn/Hiện GUI")
+    
+    -- Tạo GUI
+    CreateGUI()
+    
+    -- Tạo logo MB
+    CreateMBLogo()
+    
+    -- Sự kiện nút
+    StartBtn.MouseButton1Click:Connect(StartAutoFarm)
+    StopBtn.MouseButton1Click:Connect(StopAutoFarm)
+    NoClipToggleBtn.MouseButton1Click:Connect(ToggleNoClip)
+    GomQuaiToggleBtn.MouseButton1Click:Connect(ToggleGomQuai)
+    SpeedUpBtn.MouseButton1Click:Connect(function() ChangeSpeed(10) end)
+    SpeedDownBtn.MouseButton1Click:Connect(function() ChangeSpeed(-10) end)
+    
+    -- Phím tắt
+    UserInputService.InputBegan:Connect(function(input)
+        if input.KeyCode == Enum.KeyCode.F5 then
+            if Config.Enabled then
+                StopAutoFarm()
+            else
+                StartAutoFarm()
+            end
+        elseif input.KeyCode == Enum.KeyCode.F6 then
+            -- Tắt toàn bộ
+            StopAutoFarm()
+            local gui = player.PlayerGui:FindFirstChild("AutoFarmGUI")
+            if gui then
+                gui:Destroy()
+            end
+            CleanupLogo()
+            print("🔌 Đã tắt Auto Farm")
+        elseif input.KeyCode == Enum.KeyCode.N then
+            ToggleNoClip()
+        elseif input.KeyCode == Enum.KeyCode.G then
+            ToggleGomQuai()
+        elseif input.KeyCode == Enum.KeyCode.Equals or input.KeyCode == Enum.KeyCode.Plus then
+            ChangeSpeed(10)
+        elseif input.KeyCode == Enum.KeyCode.Minus then
+            ChangeSpeed(-10)
+        elseif input.KeyCode == Enum.KeyCode.H then
+            -- Phím tắt ẩn/hiện GUI
+            if MainFrame then
+                MainFrame.Visible = not MainFrame.Visible
+                if MainFrame.Visible and Config.RainbowGUI then
+                    StartRainbowGUI()
+                elseif not MainFrame.Visible then
+                    StopRainbowGUI()
+                end
+                print("[HOTKEY] Đã " .. (MainFrame.Visible and "hiện" or "ẩn") .. " GUI")
+            end
+        elseif input.KeyCode == Enum.KeyCode.R then
+            -- Phím tắt bật/tắt rainbow
+            ToggleRainbowGUI()
+        end
+    end)
+    
+    -- Cập nhật GUI mỗi giây
+    spawn(function()
+        while true do
+            task.wait(1)
+            UpdateGUI()
+        end
+    end)
+    
+    -- Xử lý khi nhân vật chết
+    humanoid.Died:Connect(function()
+        print("[HỆ THỐNG] Nhân vật đã chết, dừng Auto Farm")
+        StopAutoFarm()
+    end)
+    
+    -- Xử lý khi hồi sinh
+    player.CharacterAdded:Connect(function(newChar)
+        print("[HỆ THỐNG] Nhân vật hồi sinh")
+        character = newChar
+        humanoid = newChar:WaitForChild("Humanoid")
+        humanoidRootPart = newChar:WaitForChild("HumanoidRootPart")
+        
+        task.wait(2)
+        
+        if Config.Enabled then
+            print("[HỆ THỐNG] Tự động tiếp tục Auto Farm")
+            StopAutoFarm()
+            task.wait(1)
+            StartAutoFarm()
+        end
+    end)
+    
+    -- Kiểm tra module combat
+    if RegisterAttack and RegisterHit then
+        print("✅ Đã tìm thấy module Combat")
+        Config.CombatEnabled = true
+    else
+        print("⚠️ Không tìm thấy module Combat")
+        print("⚠️ Auto Farm sẽ sử dụng tấn công cơ bản")
+        Config.CombatEnabled = true
+    end
+    
+    print("\n✅ Script đã sẵn sàng!")
+    print("   F5: Bật/Tắt Auto Farm")
+    print("   F6: Tắt script")
+    print("   N: Bật/Tắt xuyên tường")
+    print("   G: Bật/Tắt gom quái")
+    print("   +/-: Tăng/Giảm tốc độ")
+    print("   H: Ẩn/Hiện GUI")
+    print("   R: Bật/Tắt Rainbow GUI")
+    print("   Logo MB: Click ẩn/hiện GUI, Double Click bật/tắt Rainbow")
+    print("   Phạm vi quét: " .. Config.ScanRange .. " studs")
+    print("   Tốc độ mặc định: " .. Config.CurrentSpeed)
+    print("   Xuyên tường mặc định: " .. (Config.NoClip and "BẬT" or "TẮT"))
+    print("   Gom quái mặc định: " .. (Config.GomQuai and "BẬT" or "TẮT"))
+    print("   Rainbow GUI mặc định: " .. (Config.RainbowGUI and "BẬT" or "TẮT"))
+end
+
+-- ==================== CHẠY SCRIPT ====================
+Initialize()
