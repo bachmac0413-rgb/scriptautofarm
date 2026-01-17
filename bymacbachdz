@@ -1,0 +1,694 @@
+-- Script Farm Rương Mạc Bách - Blox Fruit
+-- Lưu ý: Script chỉ dùng cho mục đích học tập, kiểm tra trên private server
+
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TeleportService = game:GetService("TeleportService")
+
+local Player = Players.LocalPlayer
+local Character = Player.Character or Player.CharacterAdded:Wait()
+local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
+
+-- UI Creation
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "FarmRươngMạcBách"
+ScreenGui.Parent = game.CoreGui
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0, 320, 0, 240)
+MainFrame.Position = UDim2.new(0.5, -160, 0.5, -120)
+MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Parent = ScreenGui
+
+local Corner = Instance.new("UICorner")
+Corner.CornerRadius = UDim.new(0, 8)
+Corner.Parent = MainFrame
+
+-- ĐỔI TÊN Ở ĐÂY
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, 0, 0, 40)
+Title.Position = UDim2.new(0, 0, 0, 0)
+Title.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.Text = "FARM RƯƠNG BY MẠC BÁCH"  -- ĐÃ ĐỔI TÊN
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 16
+Title.Parent = MainFrame
+
+local TitleCorner = Instance.new("UICorner")
+TitleCorner.CornerRadius = UDim.new(0, 8)
+TitleCorner.Parent = Title
+
+local ToggleButton = Instance.new("TextButton")
+ToggleButton.Size = UDim2.new(0, 120, 0, 40)
+ToggleButton.Position = UDim2.new(0.5, -60, 0.3, 0)
+ToggleButton.BackgroundColor3 = Color3.fromRGB(220, 60, 60)
+ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleButton.Text = "BẮT ĐẦU"
+ToggleButton.Font = Enum.Font.GothamBold
+ToggleButton.TextSize = 14
+ToggleButton.Parent = MainFrame
+
+local ToggleCorner = Instance.new("UICorner")
+ToggleCorner.CornerRadius = UDim.new(0, 6)
+ToggleCorner.Parent = ToggleButton
+
+local StatusLabel = Instance.new("TextLabel")
+StatusLabel.Size = UDim2.new(1, -20, 0, 30)
+StatusLabel.Position = UDim2.new(0, 10, 0, 170)
+StatusLabel.BackgroundTransparency = 1
+StatusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+StatusLabel.Text = "Trạng thái: Đang chờ"
+StatusLabel.Font = Enum.Font.Gotham
+StatusLabel.TextSize = 14
+StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+StatusLabel.Parent = MainFrame
+
+local InfoLabel = Instance.new("TextLabel")
+InfoLabel.Size = UDim2.new(1, -20, 0, 40)
+InfoLabel.Position = UDim2.new(0, 10, 0, 190)
+InfoLabel.BackgroundTransparency = 1
+InfoLabel.TextColor3 = Color3.fromRGB(255, 150, 150)
+InfoLabel.Text = "Reset sau 5 rương\nRespawn sau 15 giây"
+InfoLabel.Font = Enum.Font.Gotham
+InfoLabel.TextSize = 11
+InfoLabel.TextXAlignment = Enum.TextXAlignment.Left
+InfoLabel.Parent = MainFrame
+
+local SpeedLabel = Instance.new("TextLabel")
+SpeedLabel.Size = UDim2.new(1, -20, 0, 20)
+SpeedLabel.Position = UDim2.new(0, 10, 0, 120)
+SpeedLabel.BackgroundTransparency = 1
+SpeedLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+SpeedLabel.Text = "Tốc độ: TURBO (No Delay)"
+SpeedLabel.Font = Enum.Font.Gotham
+SpeedLabel.TextSize = 12
+SpeedLabel.TextXAlignment = Enum.TextXAlignment.Left
+SpeedLabel.Parent = MainFrame
+
+local ChestCountLabel = Instance.new("TextLabel")
+ChestCountLabel.Size = UDim2.new(1, -20, 0, 20)
+ChestCountLabel.Position = UDim2.new(0, 10, 0, 140)
+ChestCountLabel.BackgroundTransparency = 1
+ChestCountLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+ChestCountLabel.Text = "Tìm thấy: 0 rương | Đã nhặt: 0/5"
+ChestCountLabel.Font = Enum.Font.Gotham
+ChestCountLabel.TextSize = 12
+ChestCountLabel.TextXAlignment = Enum.TextXAlignment.Left
+ChestCountLabel.Parent = MainFrame
+
+local TimerLabel = Instance.new("TextLabel")
+TimerLabel.Size = UDim2.new(1, -20, 0, 20)
+TimerLabel.Position = UDim2.new(0, 10, 0, 155)
+TimerLabel.BackgroundTransparency = 1
+TimerLabel.TextColor3 = Color3.fromRGB(150, 200, 255)
+TimerLabel.Text = "Respawn sau: 15 giây"
+TimerLabel.Font = Enum.Font.Gotham
+TimerLabel.TextSize = 12
+TimerLabel.TextXAlignment = Enum.TextXAlignment.Left
+TimerLabel.Parent = MainFrame
+
+-- Script Variables
+local isRunning = false
+local currentChest = nil
+local chests = {}
+local noclipEnabled = false
+local connection
+local chestsCollected = 0  -- Đếm số rương đã nhặt
+local totalChestsFound = 0  -- Tổng số rương đã tìm thấy
+local startTime = 0  -- Thời gian bắt đầu farm
+local respawnTimer = 0  -- Thời gian đã trôi qua
+local respawnInterval = 15  -- Giảm thời gian respawn xuống 15 giây
+local respawnCooldown = 3  -- Giảm thời gian chờ sau respawn xuống 3 giây
+
+-- Noclip function
+local function enableNoclip()
+    if noclipEnabled then return end
+    
+    noclipEnabled = true
+    local function noclipLoop()
+        if Character and noclipEnabled then
+            for _, part in ipairs(Character:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = false
+                end
+            end
+        end
+    end
+    
+    connection = RunService.Stepped:Connect(noclipLoop)
+end
+
+local function disableNoclip()
+    if not noclipEnabled then return end
+    
+    noclipEnabled = false
+    if connection then
+        connection:Disconnect()
+        connection = nil
+    end
+    
+    if Character then
+        for _, part in ipairs(Character:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.CanCollide = true
+            end
+        end
+    end
+end
+
+-- Hàm respawn nhanh hơn
+local function respawnPlayer()
+    if not isRunning then return end
+    
+    StatusLabel.Text = "Đang respawn..."
+    disableNoclip()  -- Tắt noclip trước khi respawn
+    
+    -- Tìm RemoteEvent để respawn
+    local replicatedStorage = game:GetService("ReplicatedStorage")
+    local respawnRemote = nil
+    
+    local function findRespawnRemote(parent)
+        for _, item in ipairs(parent:GetChildren()) do
+            if item:IsA("RemoteEvent") then
+                local name = string.lower(item.Name)
+                if name:find("respawn") or name:find("reset") or name:find("spawn") then
+                    return item
+                end
+            elseif item:IsA("Folder") then
+                local result = findRespawnRemote(item)
+                if result then return result end
+            end
+        end
+        return nil
+    end
+    
+    respawnRemote = findRespawnRemote(replicatedStorage)
+    
+    if respawnRemote then
+        pcall(function()
+            respawnRemote:FireServer()
+        end)
+    else
+        pcall(function()
+            if Character:FindFirstChild("Humanoid") then
+                Character.Humanoid.Health = 0
+            end
+        end)
+    end
+    
+    -- Giảm thời gian chờ
+    StatusLabel.Text = "Chờ respawn..."
+    wait(1)  -- Giảm từ 3 giây xuống 1 giây
+    
+    StatusLabel.Text = "Đợi character mới..."
+    Character = Player.Character or Player.CharacterAdded:Wait()
+    HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
+    
+    -- Reset bộ đếm
+    chestsCollected = 0
+    chests = {}
+    startTime = tick()
+    
+    -- Bật lại noclip nhanh hơn
+    if isRunning then
+        StatusLabel.Text = "Đã respawn, bật noclip..."
+        wait(0.5)  -- Giảm thời gian chờ
+        enableNoclip()
+    end
+    
+    return true
+end
+
+-- Kiểm tra có vật phẩm đặc biệt không
+local function hasSpecialItem()
+    if not Character then return false, nil end
+    
+    -- Kiểm tra trong Character
+    for _, item in ipairs(Character:GetChildren()) do
+        if item:IsA("Tool") then
+            local name = string.lower(item.Name)
+            if name:find("fist") and name:find("darkness") then
+                return true, "Fist of Darkness"
+            elseif name:find("god") and name:find("chalice") then
+                return true, "God's Chalice"
+            end
+        end
+    end
+    
+    -- Kiểm tra trong Backpack
+    local backpack = Player:FindFirstChild("Backpack")
+    if backpack then
+        for _, item in ipairs(backpack:GetChildren()) do
+            if item:IsA("Tool") then
+                local name = string.lower(item.Name)
+                if name:find("fist") and name:find("darkness") then
+                    return true, "Fist of Darkness"
+                elseif name:find("god") and name:find("chalice") then
+                    return true, "God's Chalice"
+                end
+            end
+        end
+    end
+    
+    return false, nil
+end
+
+-- Scan for chests - CẢI THIỆN TỐC ĐỘ QUÉT
+local function scanForChests()
+    local newChests = {}
+    
+    -- Tìm tất cả các rương trong workspace nhanh hơn
+    local chestNames = {"chest", "ruong", "treasure", "box", "chest"}
+    
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("Model") or obj:IsA("Part") then
+            local objName = string.lower(obj.Name)
+            for _, name in ipairs(chestNames) do
+                if objName:find(name) then
+                    if obj and obj.Parent then
+                        table.insert(newChests, obj)
+                        break
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Tìm thêm các vật thể có thể là rương
+    for _, obj in ipairs(Workspace:GetChildren()) do
+        if obj:IsA("Model") then
+            local primary = obj.PrimaryPart or obj:FindFirstChild("Handle") or obj:FindFirstChildWhichIsA("BasePart")
+            if primary then
+                local objName = string.lower(obj.Name)
+                for _, name in ipairs(chestNames) do
+                    if objName:find(name) then
+                        table.insert(newChests, obj)
+                        break
+                    end
+                end
+            end
+        end
+    end
+    
+    chests = newChests
+    totalChestsFound = #chests
+    ChestCountLabel.Text = string.format("Tìm thấy: %d rương | Đã nhặt: %d/5", totalChestsFound, chestsCollected)
+    return chests
+end
+
+-- Dịch chuyển tức thời SIÊU TỐC
+local function instantTeleport(position)
+    if not Character or not HumanoidRootPart then return false end
+    
+    -- Dịch chuyển tức thời bằng CFrame với tốc độ cao nhất
+    local success = pcall(function()
+        HumanoidRootPart.CFrame = CFrame.new(position)
+    end)
+    
+    -- Thử thêm phương pháp backup nếu cần
+    if not success then
+        pcall(function()
+            Character:SetPrimaryPartCFrame(CFrame.new(position))
+        end)
+    end
+    
+    return true
+end
+
+-- Hàm reset farm nhanh hơn
+local function resetFarm()
+    chestsCollected = 0
+    chests = {}
+    scanForChests()
+    startTime = tick()
+    StatusLabel.Text = "Đã reset, tiếp tục tìm rương..."
+    ChestCountLabel.Text = string.format("Tìm thấy: %d rương | Đã nhặt: %d/5", totalChestsFound, chestsCollected)
+end
+
+-- Xử lý khi có vật phẩm đặc biệt
+local function handleSpecialItem(itemName)
+    if not isRunning then return end
+    
+    StatusLabel.Text = string.format("Đã tìm thấy %s!", itemName)
+    InfoLabel.Text = string.format("Đã tìm thấy %s!\nChọn: Tiếp tục/Dừng", itemName)
+    
+    -- Tạo UI để người dùng chọn
+    local ChoiceFrame = Instance.new("Frame")
+    ChoiceFrame.Size = UDim2.new(0, 250, 0, 150)
+    ChoiceFrame.Position = UDim2.new(0.5, -125, 0.5, -75)
+    ChoiceFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
+    ChoiceFrame.BorderSizePixel = 0
+    ChoiceFrame.Parent = ScreenGui
+    
+    local ChoiceCorner = Instance.new("UICorner")
+    ChoiceCorner.CornerRadius = UDim.new(0, 8)
+    ChoiceCorner.Parent = ChoiceFrame
+    
+    local ChoiceTitle = Instance.new("TextLabel")
+    ChoiceTitle.Size = UDim2.new(1, 0, 0, 40)
+    ChoiceTitle.Position = UDim2.new(0, 0, 0, 0)
+    ChoiceTitle.BackgroundColor3 = Color3.fromRGB(60, 60, 100)
+    ChoiceTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    ChoiceTitle.Text = string.format("TÌM THẤY %s!", string.upper(itemName))
+    ChoiceTitle.Font = Enum.Font.GothamBold
+    ChoiceTitle.TextSize = 16
+    ChoiceTitle.Parent = ChoiceFrame
+    
+    local ChoiceTitleCorner = Instance.new("UICorner")
+    ChoiceTitleCorner.CornerRadius = UDim.new(0, 8)
+    ChoiceTitleCorner.Parent = ChoiceTitle
+    
+    local ChoiceText = Instance.new("TextLabel")
+    ChoiceText.Size = UDim2.new(1, -20, 0, 40)
+    ChoiceText.Position = UDim2.new(0, 10, 0, 50)
+    ChoiceText.BackgroundTransparency = 1
+    ChoiceText.TextColor3 = Color3.fromRGB(200, 200, 200)
+    ChoiceText.Text = "Bạn muốn làm gì?"
+    ChoiceText.Font = Enum.Font.Gotham
+    ChoiceText.TextSize = 14
+    ChoiceText.Parent = ChoiceFrame
+    
+    local ContinueButton = Instance.new("TextButton")
+    ContinueButton.Size = UDim2.new(0, 100, 0, 35)
+    ContinueButton.Position = UDim2.new(0.5, -110, 0, 100)
+    ContinueButton.BackgroundColor3 = Color3.fromRGB(60, 200, 60)
+    ContinueButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    ContinueButton.Text = "TIẾP TỤC FARM"
+    ContinueButton.Font = Enum.Font.GothamBold
+    ContinueButton.TextSize = 12
+    ContinueButton.Parent = ChoiceFrame
+    
+    local ContinueCorner = Instance.new("UICorner")
+    ContinueCorner.CornerRadius = UDim.new(0, 6)
+    ContinueCorner.Parent = ContinueButton
+    
+    local StopButton = Instance.new("TextButton")
+    StopButton.Size = UDim2.new(0, 100, 0, 35)
+    StopButton.Position = UDim2.new(0.5, 10, 0, 100)
+    StopButton.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
+    StopButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    StopButton.Text = "DỪNG LẠI"
+    StopButton.Font = Enum.Font.GothamBold
+    StopButton.TextSize = 12
+    StopButton.Parent = ChoiceFrame
+    
+    local StopCorner = Instance.new("UICorner")
+    StopCorner.CornerRadius = UDim.new(0, 6)
+    StopCorner.Parent = StopButton
+    
+    -- Xử lý sự kiện nút
+    local choiceMade = false
+    
+    ContinueButton.MouseButton1Click:Connect(function()
+        choiceMade = true
+        ChoiceFrame:Destroy()
+        StatusLabel.Text = string.format("Tiếp tục farm (Đã có %s)", itemName)
+        InfoLabel.Text = "Reset sau 5 rương\nRespawn sau 15 giây"
+    end)
+    
+    StopButton.MouseButton1Click:Connect(function()
+        choiceMade = true
+        ChoiceFrame:Destroy()
+        isRunning = false
+        ToggleButton.BackgroundColor3 = Color3.fromRGB(220, 60, 60)
+        ToggleButton.Text = "BẮT ĐẦU"
+        StatusLabel.Text = string.format("Đã dừng vì tìm thấy %s", itemName)
+        disableNoclip()
+    end)
+    
+    -- Đợi người dùng chọn
+    repeat wait(0.1) until choiceMade
+end
+
+-- Farm chests - TỐC ĐỘ CAO, KHÔNG DELAY
+local function farmChests()
+    if not isRunning then return end
+    
+    startTime = tick()
+    
+    while isRunning do
+        -- Kiểm tra nếu đã có vật phẩm đặc biệt
+        local hasSpecial, itemName = hasSpecialItem()
+        if hasSpecial then
+            handleSpecialItem(itemName)
+            if not isRunning then break end
+        end
+        
+        -- Kiểm tra thời gian respawn (15 giây)
+        respawnTimer = tick() - startTime
+        local timeLeft = respawnInterval - respawnTimer
+        TimerLabel.Text = string.format("Respawn sau: %.0f giây", timeLeft)
+        
+        if respawnTimer >= respawnInterval then
+            StatusLabel.Text = "Đã đến 15 giây, đang respawn..."
+            respawnPlayer()
+            scanForChests()  -- Quét lại rương sau respawn
+            continue
+        end
+        
+        -- Quét rương
+        scanForChests()
+        
+        if #chests == 0 then
+            StatusLabel.Text = string.format("Không tìm thấy rương (Respawn sau: %.0fs)", timeLeft)
+            wait(1)  -- Giảm thời gian chờ
+            if not isRunning then break end
+            continue
+        end
+        
+        -- Duyệt qua TẤT CẢ rương TRONG MỘT VÒNG LẶP NHANH
+        for i, chest in ipairs(chests) do
+            if not isRunning then break end
+            
+            -- Kiểm tra lại vật phẩm đặc biệt
+            local hasSpecial, itemName = hasSpecialItem()
+            if hasSpecial then
+                handleSpecialItem(itemName)
+                if not isRunning then break end
+            end
+            
+            -- Kiểm tra thời gian respawn
+            respawnTimer = tick() - startTime
+            if respawnTimer >= respawnInterval then
+                StatusLabel.Text = "Đã đến 15 giây, đang respawn..."
+                respawnPlayer()
+                break
+            end
+            
+            -- Kiểm tra chest có tồn tại không
+            if not chest or not chest.Parent then
+                continue
+            end
+            
+            local chestPosition
+            if chest:IsA("Model") then
+                local primaryPart = chest.PrimaryPart or chest:FindFirstChild("Handle") or chest:FindFirstChildWhichIsA("BasePart")
+                if primaryPart then
+                    chestPosition = primaryPart.Position
+                else
+                    continue
+                end
+            else
+                chestPosition = chest.Position
+            end
+            
+            StatusLabel.Text = string.format("Đến rương %d/%d (Respawn sau: %.0fs)", i, #chests, respawnInterval - respawnTimer)
+            currentChest = chest
+            
+            -- Dịch chuyển tức thời đến rương (SIÊU TỐC)
+            local success = instantTeleport(chestPosition + Vector3.new(0, 3, 0))
+            
+            if success then
+                -- KHÔNG CHỜ - Xử lý ngay lập tức
+                -- Chỉ chờ 0.1 giây thay vì 1 giây
+                wait(0.1)
+                
+                -- Kiểm tra xem rương có còn tồn tại sau khi mở
+                if not chest or not chest.Parent then
+                    -- Rương đã biến mất (ĐÃ NHẶT THÀNH CÔNG)
+                    chestsCollected = chestsCollected + 1
+                    ChestCountLabel.Text = string.format("Tìm thấy: %d rương | Đã nhặt: %d/5", #chests, chestsCollected)
+                    StatusLabel.Text = string.format("Đã nhặt rương %d/5 (Respawn sau: %.0fs)", chestsCollected, respawnInterval - respawnTimer)
+                    
+                    -- Kiểm tra nếu đã nhặt đủ 5 rương
+                    if chestsCollected >= 5 then
+                        StatusLabel.Text = "Đã nhặt đủ 5 rương, reset trong 1 giây..."
+                        
+                        -- Chờ 1 giây thay vì 2 giây
+                        wait(1)
+                        
+                        if isRunning then
+                            resetFarm()
+                        end
+                        
+                        break
+                    else
+                        -- KHÔNG CHỜ - tiếp tục ngay
+                        StatusLabel.Text = string.format("Đã nhặt rương %d/5, tiếp tục...", chestsCollected)
+                    end
+                else
+                    -- Rương vẫn còn (CHƯA NHẶT ĐƯỢC) - thử lại ngay
+                    -- Dịch chuyển lại một lần nữa để đảm bảo
+                    instantTeleport(chestPosition + Vector3.new(0, 1, 0))
+                    wait(0.05)  -- Chờ rất ngắn
+                    StatusLabel.Text = string.format("Thử lại rương %d... (Respawn sau: %.0fs)", i, respawnInterval - respawnTimer)
+                end
+            end
+            
+            if not isRunning then break end
+        end
+        
+        -- Nếu vẫn đang chạy, quét lại ngay lập tức
+        if isRunning then
+            wait(0.5)  -- Giảm thời gian chờ giữa các lần quét
+        end
+    end
+end
+
+-- Toggle button functionality
+ToggleButton.MouseButton1Click:Connect(function()
+    isRunning = not isRunning
+    
+    if isRunning then
+        ToggleButton.BackgroundColor3 = Color3.fromRGB(60, 220, 60)
+        ToggleButton.Text = "DỪNG LẠI"
+        StatusLabel.Text = "Đang quét bản đồ..."
+        chestsCollected = 0
+        startTime = tick()
+        
+        -- Bật noclip
+        enableNoclip()
+        
+        -- Quét rương
+        chests = {}
+        scanForChests()
+        
+        -- Bắt đầu farm với tốc độ cao
+        spawn(function()
+            farmChests()
+        end)
+    else
+        ToggleButton.BackgroundColor3 = Color3.fromRGB(220, 60, 60)
+        ToggleButton.Text = "BẮT ĐẦU"
+        StatusLabel.Text = "Trạng thái: Đã dừng"
+        currentChest = nil
+        chestsCollected = 0
+        
+        -- Tắt noclip
+        disableNoclip()
+    end
+end)
+
+-- Auto-update character references
+Player.CharacterAdded:Connect(function(char)
+    Character = char
+    HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
+    
+    if isRunning then
+        wait(0.5)  -- Giảm thời gian chờ
+        enableNoclip()
+    end
+end)
+
+-- Auto-check for special items với popup (tăng tần suất kiểm tra)
+spawn(function()
+    while true do
+        wait(1)  -- Kiểm tra mỗi 1 giây thay vì 3 giây
+        if isRunning then
+            local hasSpecial, itemName = hasSpecialItem()
+            if hasSpecial and itemName then
+                local existingPopup = ScreenGui:FindFirstChild("ChoiceFrame")
+                if not existingPopup then
+                    handleSpecialItem(itemName)
+                end
+            end
+        end
+    end
+end)
+
+-- Auto-scan every 5 seconds (tăng tần suất)
+spawn(function()
+    while true do
+        wait(5)  -- Quét mỗi 5 giây thay vì 15 giây
+        if isRunning then
+            scanForChests()
+        end
+    end
+end)
+
+-- Hiển thị thời gian respawn (update nhanh hơn)
+spawn(function()
+    while true do
+        wait(0.5)  -- Update mỗi 0.5 giây
+        if isRunning then
+            respawnTimer = tick() - startTime
+            local timeLeft = respawnInterval - respawnTimer
+            if timeLeft < 0 then timeLeft = 0 end
+            TimerLabel.Text = string.format("Respawn sau: %.1f giây", timeLeft)
+            InfoLabel.Text = string.format("Reset sau 5 rương\nRespawn sau: %.1f giây | Rương: %d/5", timeLeft, chestsCollected)
+        end
+    end
+end)
+
+-- Nút respawn thủ công (nhanh hơn)
+local RespawnButton = Instance.new("TextButton")
+RespawnButton.Size = UDim2.new(0, 120, 0, 30)
+RespawnButton.Position = UDim2.new(0.5, -60, 0.7, 0)
+RespawnButton.BackgroundColor3 = Color3.fromRGB(80, 180, 80)
+RespawnButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+RespawnButton.Text = "RESPAWN NGAY"
+RespawnButton.Font = Enum.Font.GothamBold
+RespawnButton.TextSize = 12
+RespawnButton.Parent = MainFrame
+
+local RespawnCorner = Instance.new("UICorner")
+RespawnCorner.CornerRadius = UDim.new(0, 6)
+RespawnCorner.Parent = RespawnButton
+
+RespawnButton.MouseButton1Click:Connect(function()
+    if isRunning then
+        StatusLabel.Text = "Đang respawn thủ công..."
+        respawnPlayer()
+        scanForChests()
+        StatusLabel.Text = "Đã respawn xong, tiếp tục farm..."
+    else
+        StatusLabel.Text = "Vui lòng bật script trước khi respawn"
+        wait(1)  -- Giảm thời gian chờ
+        StatusLabel.Text = "Trạng thái: Đã dừng"
+    end
+end)
+
+-- Close UI with key (RightControl)
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if input.KeyCode == Enum.KeyCode.RightControl then
+        ScreenGui.Enabled = not ScreenGui.Enabled
+    end
+end)
+
+-- Initial scan
+scanForChests()
+
+-- ĐỔI TÊN TRONG PHẦN PRINT
+print("══════════════════════════════════════════")
+print("      SCRIPT FARM RƯƠNG BY MẠC BÁCH        ")
+print("══════════════════════════════════════════")
+print("TÍNH NĂNG TURBO:")
+print("- Dịch chuyển SIÊU TỐC (No Delay)")
+print("- Respawn mỗi 15 giây (thay vì 20)")
+print("- Không chờ giữa các rương")
+print("- Quét rương nhanh hơn")
+print("- Tự động retry nếu chưa mở được rương")
+print("")
+print("KHI CÓ Fist of Darkness HOẶC God's Chalice:")
+print("   - Hiện popup cho phép chọn: Tiếp tục farm hoặc Dừng")
+print("   - Nếu chọn tiếp tục: vẫn farm bình thường")
+print("   - Nếu chọn dừng: tắt script")
+print("Nhấn RightControl để ẩn/hiện UI")
+print("Nhấn nút 'RESPAWN NGAY' để respawn thủ công")
+print("══════════════════════════════════════════")
